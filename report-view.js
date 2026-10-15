@@ -21,6 +21,10 @@ function renderMeaningSection(report) {
     }
     const chunks = report.meaningHits?.chunks ?? [];
     const seeds = report.meaningSeeds ?? [];
+    if (report.meaningSkipped) {
+        return `<h4>Matched by meaning</h4><div class="lore_graph_meta">${escapeHtml(report.meaningSkipped)}</div>
+            ${chunks.length ? `<ul>${chunks.map(c => `<li>#${c.rank + 1} ${escapeHtml(c.id)} <small>(weak, not used)</small></li>`).join('')}</ul>` : ''}`;
+    }
     if (!chunks.length && !seeds.length) {
         return '<h4>Matched by meaning</h4><div class="lore_graph_meta">Nothing was close enough in meaning (above the similarity threshold).</div>';
     }
@@ -72,6 +76,7 @@ export function showRetrievalReport(report, title, onOpenChunk) {
             ${notIncluded.length ? `<details><summary>Not included (${notIncluded.length})</summary><table class="lore_graph_table"><tbody>${notIncluded.slice(0, 40).map(chunkRow).join('')}</tbody></table></details>` : ''}
 
             <h4>Injected text</h4>
+            ${report.notice ? `<div class="lore_graph_status_warning">${escapeHtml(report.notice)}</div>` : ''}
             <div class="lore_graph_popup_block lore_graph_meta">${report.promptText ? escapeHtml(report.promptText) : '(nothing)'}</div>
 
             ${report.scannedMessages?.length ? `<details><summary>Scanned messages (${report.scannedMessages.length})</summary>${report.scannedMessages.map((m, i) => `<div class="lore_graph_popup_block lore_graph_meta"><b>${escapeHtml(ageLabel(report.scannedMessages.length - 1 - i))}:</b> ${escapeHtml(String(m).slice(0, 600))}${String(m).length > 600 ? '…' : ''}</div>`).join('')}</details>` : ''}

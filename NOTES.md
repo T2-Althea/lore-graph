@@ -189,3 +189,17 @@ Oct 2026). Paths are relative to the SillyTavern root.
   to Dungeon §16's guardrail, this pulls in Guild §5 and the undead test passes
   (meaning search on). Writing lore that names the other document's term is what makes
   cross-document links possible.
+
+## Inspector and test list (M4)
+- Each AI reply gets `message.extra.lore_graph` (and the same on its current swipe):
+  a compact report (≈4–6 KB: seeds, meaning hits, everything sent + 5 near-misses,
+  10 paths, short message excerpts, chunk hashes). Attached on `MESSAGE_RECEIVED` from
+  the report the interceptor just produced (ignored if older than 15 min, or for
+  quiet/impersonate). The lore text is rebuilt from current chunks when opened; edited or
+  missing chunks are flagged. A "book" button is prepended to `#message_template
+  .extraMesButtons` at runtime (no core file changes) and to messages already on screen.
+- Test list: `lore-graph_tests.json` ({ text, expected chunk ids | nothing, note, last }).
+  Started from the CLAUDE.md cases. Run all = runRetrieval per test (no LLM calls).
+- Meaning-search safety rules found while building M4: entity-only meaning hits need
+  other evidence (a chunk meaning hit or any lore name), and with no lore names at all,
+  weak chunk hits alone are ignored. 14 short casual lines tested: all inject nothing.

@@ -295,3 +295,31 @@
 .lore_graph_name_mode select {
     width: auto;
 }
+
+/* Lore record button: only meaningful on AI replies. */
+.mes[is_user="true"] .lore_graph_mes_button {
+    display: none;
+}
+
+.lore_graph_test_actions {
+    white-space: nowrap;
+}
+
+.lore_graph_test_actions .menu_button {
+    display: inline-flex;
+    padding: 4px 6px;
+}
+
+.lore_graph_test_editor textarea {
+    width: 100%;
+}
+
+.lore_graph_test_expected label {
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+}
+
+.lore_graph_test_add {
+    flex: 1;
+}

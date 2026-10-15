@@ -164,12 +164,35 @@
                     <i class="fa-solid fa-flask"></i>
                     <span>Test</span>
                 </div>
+                <div id="lore_graph_save_test" class="menu_button menu_button_icon disabled" title="Save this sentence and the sections it found as a test">
+                    <i class="fa-solid fa-floppy-disk"></i>
+                    <span>Save as test</span>
+                </div>
                 <div id="lore_graph_last" class="menu_button menu_button_icon" title="What was injected before the last AI reply, and why">
                     <i class="fa-solid fa-magnifying-glass-chart"></i>
                     <span>Last injection</span>
                 </div>
             </div>
             <div id="lore_graph_last_summary" class="lore_graph_status"></div>
+            <label class="checkbox_label" for="lore_graph_record">
+                <input id="lore_graph_record" type="checkbox" />
+                <span>Keep a lore record on each AI reply (open it from the message's "…" menu → book icon)</span>
+            </label>
+
+            <hr />
+            <h4>Test list</h4>
+            <small class="lore_graph_hint">Saved test sentences with the sections each should pull in. Run them after adding or editing lore files to catch broken links. No AI calls.</small>
+            <div class="flex-container">
+                <div id="lore_graph_tests_run" class="menu_button menu_button_icon">
+                    <i class="fa-solid fa-list-check"></i>
+                    <span>Run all tests</span>
+                </div>
+                <div id="lore_graph_tests_open" class="menu_button menu_button_icon">
+                    <i class="fa-solid fa-list"></i>
+                    <span>Open test list</span>
+                </div>
+            </div>
+            <div id="lore_graph_tests_summary" class="lore_graph_status"></div>
         </div>
     </div>
 </div>

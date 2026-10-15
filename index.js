@@ -15,6 +15,8 @@ import { DEFAULT_RETRIEVAL_SETTINGS, getMatchMode, getNameModes } from './retrie
 import { matchForm } from './schema.js';
 import { showRetrievalReport } from './report-view.js';
 import { loadEmbeddingState, semanticSearch, syncEmbeddingIndex } from './embeddings.js';
+import { addMessageButtons, attachPendingReport, expandRecord, getRecord, setPendingReport } from './inspector.js';
+import { editTestPopup, loadTests, runTest, saveTests, showTestList } from './tests.js';
 
 const MODULE_NAME = 'lore_graph';
 const EXTENSION_FOLDER = 'third-party/lore-graph';
@@ -28,6 +30,7 @@ const defaultSettings = {
     extraction_timeout_seconds: 180,
     extraction_structured_output: true,
     ...DEFAULT_INJECTION_SETTINGS,
+    record_injections: true,
 };
 
 /** Runtime state (not saved in settings). */
@@ -790,11 +793,173 @@ async function onTestRetrieval() {
         // Each line counts as one message, newest last.
         const messages = text.split(/\n+/).map(x => x.trim()).filter(Boolean);
         const report = await runRetrieval(chunks, messages, getSettings());
+        state.lastTest = { text, report };
+        $('#lore_graph_save_test').removeClass('disabled');
         showRetrievalReport(report, 'Test retrieval', openChunkById);
     } catch (error) {
         console.error('Lore Graph: test retrieval failed', error);
         toastr.error(String(error?.message ?? error), 'Lore Graph');
     }
+}
+
+// ---------------------------------------------------------------- inspector & test list (M4)
+
+function getChunkMap() {
+    return new Map(getCurrentChunks().map(c => [c.id, c]));
+}
+
+async function onMessageLoreClick() {
+    const messageId = Number($(this).closest('.mes').attr('mesid'));
+    const record = getRecord(messageId);
+    if (!record) {
+        toastr.info('No lore record for this message. It was generated before Lore Graph recorded replies, with the extension off, or with recording turned off.', 'Lore Graph');
+        return;
+    }
+    const report = expandRecord(record, getChunkMap(), getSettings().inject_template);
+    showRetrievalReport(report, `Lore for message #${messageId}`, openChunkById);
+}
+
+async function getTests() {
+    if (!state.tests) {
+        try {
+            state.tests = await loadTests();
+        } catch (error) {
+            toastr.error(`Could not read the test list: ${error?.message ?? error}`, 'Lore Graph');
+            return null;
+        }
+    }
+    return state.tests;
+}
+
+function renderTestSummary() {
+    const tests = state.tests;
+    const el = $('#lore_graph_tests_summary');
+    if (!tests) {
+        el.text('');
+        return;
+    }
+    const ran = tests.filter(t => t.last);
+    const passed = ran.filter(t => t.last.pass).length;
+    const latest = ran.length ? Math.max(...ran.map(t => t.last.at)) : 0;
+    el.text(`${tests.length} test(s).${ran.length ? ` Last run (${new Date(latest).toLocaleString()}): ${passed} of ${ran.length} passed.` : ' Not run yet.'}`);
+}
+
+async function runOneTest(test) {
+    const chunks = getCurrentChunks();
+    if (!chunks.length) {
+        toastr.info('No chunks loaded. Click Rescan first.', 'Lore Graph');
+        return null;
+    }
+    const result = await runTest(test, chunks, getSettings());
+    await saveTests(state.tests);
+    renderTestSummary();
+    return result;
+}
+
+const testListHandlers = {
+    onOpenReport: (report, title) => showRetrievalReport(report, title, openChunkById),
+    onRun: runOneTest,
+    onEdit: async (test) => {
+        const edited = await editTestPopup(test, getCurrentChunks().map(c => c.id), { title: 'Edit test' });
+        if (!edited) return;
+        Object.assign(test, edited);
+        await saveTests(state.tests);
+        renderTestSummary();
+    },
+    onDelete: async (test) => {
+        const confirmed = await callGenericPopup(`Delete the test "${escapeHtml(test.text.slice(0, 80))}"?`, POPUP_TYPE.CONFIRM);
+        if (confirmed !== POPUP_RESULT.AFFIRMATIVE) return;
+        const i = state.tests.indexOf(test);
+        if (i !== -1) state.tests.splice(i, 1);
+        await saveTests(state.tests);
+        renderTestSummary();
+    },
+};
+
+async function onSaveAsTest() {
+    if (!state.lastTest) {
+        toastr.info('Run a Test retrieval first.', 'Lore Graph');
+        return;
+    }
+    const tests = await getTests();
+    if (!tests) return;
+    const injected = state.lastTest.report.chunks.filter(c => c.status === 'full' || c.status === 'tldr').map(c => c.id);
+    const test = await editTestPopup({ text: state.lastTest.text, nothing: injected.length === 0 }, getCurrentChunks().map(c => c.id), { title: 'Save as test', injected });
+    if (!test) return;
+    tests.push(test);
+    await saveTests(tests);
+    renderTestSummary();
+    toastr.success('Test saved.', 'Lore Graph');
+}
+
+async function onRunAllTests() {
+    if (state.testsRunning) return;
+    const tests = await getTests();
+    if (!tests) return;
+    if (!tests.length) {
+        toastr.info('The test list is empty. Use "Save as test" after a Test retrieval.', 'Lore Graph');
+        return;
+    }
+    const chunks = getCurrentChunks();
+    if (!chunks.length) {
+        toastr.info('No chunks loaded. Click Rescan first.', 'Lore Graph');
+        return;
+    }
+    state.testsRunning = true;
+    const button = $('#lore_graph_tests_run').addClass('disabled');
+    const results = [];
+    try {
+        for (let i = 0; i < tests.length; i++) {
+            $('#lore_graph_tests_summary').text(`Running test ${i + 1} of ${tests.length}…`);
+            results.push(await runTest(tests[i], chunks, getSettings()));
+        }
+        await saveTests(tests);
+    } catch (error) {
+        console.error('Lore Graph: running tests failed', error);
+        toastr.error(String(error?.message ?? error), 'Lore Graph');
+    } finally {
+        state.testsRunning = false;
+        button.removeClass('disabled');
+        renderTestSummary();
+    }
+    if (results.length) {
+        const passed = results.filter(r => r.pass).length;
+        if (!getSettings().embed_enabled) {
+            toastr.info('Meaning search is off, so tests that rely on it may fail.', 'Lore Graph');
+        }
+        showTestList(tests, results, testListHandlers);
+        (passed === results.length ? toastr.success : toastr.warning)(`${passed} of ${results.length} tests passed.`, 'Lore Graph');
+    }
+}
+
+async function onOpenTestList() {
+    const tests = await getTests();
+    if (!tests) return;
+    showTestList(tests, null, testListHandlers);
+}
+
+function bindInspectorAndTests() {
+    const settings = getSettings();
+    $('#lore_graph_record').prop('checked', settings.record_injections).on('input', function () {
+        settings.record_injections = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+    $('#lore_graph_save_test').on('click', onSaveAsTest);
+    $('#lore_graph_tests_run').on('click', onRunAllTests);
+    $('#lore_graph_tests_open').on('click', onOpenTestList);
+    $(document).on('click', '.lore_graph_mes_button', onMessageLoreClick);
+
+    addMessageButtons();
+    eventSource.on(event_types.CHAT_CHANGED, addMessageButtons);
+    eventSource.on(event_types.MORE_MESSAGES_LOADED, addMessageButtons);
+    eventSource.on(event_types.MESSAGE_RECEIVED, (messageId, type) => {
+        try {
+            if (getSettings().record_injections) attachPendingReport(Number(messageId), type, getChunkMap());
+        } catch (error) {
+            console.error('Lore Graph: could not attach the lore record', error);
+        }
+    });
+    getTests().then(renderTestSummary);
 }
 
 function renderLastInjection() {
@@ -805,8 +970,9 @@ function renderLastInjection() {
         return;
     }
     const included = report.chunks.filter(c => c.status === 'full' || c.status === 'tldr').length;
+    const sources = [...report.seeds.map(s => s.name), ...(report.meaningHits?.chunks.length ? ['meaning matches'] : [])];
     el.text(included
-        ? `Last reply (${new Date(report.at).toLocaleTimeString()}): ${included} chunk(s), ${report.tokens} tokens, from ${report.seeds.map(s => s.name).join(', ')}.`
+        ? `Last reply (${new Date(report.at).toLocaleTimeString()}): ${included} chunk(s), ${report.tokens} tokens, from ${sources.join(', ')}.`
         : `Last reply (${new Date(report.at).toLocaleTimeString()}): nothing injected${report.ignored.length ? ` (ignored: ${report.ignored.map(i => i.via).join(', ')})` : ''}.`);
 }
 
@@ -816,6 +982,7 @@ globalThis.loreGraph_generateInterceptor = async function (chat, _contextSize, _
         const report = await interceptGeneration(chat, type, getSettings(), getCurrentChunks);
         if (report) {
             state.lastReport = report;
+            setPendingReport(report);
             renderLastInjection();
             console.debug('Lore Graph: injected', report);
         }
@@ -877,6 +1044,7 @@ function bindRetrievalSettings() {
     $('#lore_graph_everyday').on('click', onEverydayCheck);
     renderLastInjection();
     bindEmbeddingSettings();
+    bindInspectorAndTests();
 }
 
 // ---------------------------------------------------------------- meaning search (M3b)
