@@ -245,6 +245,36 @@ async function onImportFiles(files) {
     await rescan();
 }
 
+/**
+ * Opens a file picker. Where supported (Chrome, Edge), the browser's newer picker
+ * remembers the last folder used for this button; elsewhere the plain file input is used.
+ */
+async function onImportClick() {
+    if (typeof window.showOpenFilePicker !== 'function') {
+        $('#lore_graph_import_file').trigger('click');
+        return;
+    }
+    let handles;
+    try {
+        handles = await window.showOpenFilePicker({
+            id: 'lore-graph-import',
+            multiple: true,
+            types: [{ description: 'Lore text files', accept: { 'text/plain': ['.txt'] } }],
+        });
+    } catch (error) {
+        if (error?.name === 'AbortError') {
+            return; // user closed the picker
+        }
+        console.warn('Lore Graph: modern file picker failed, using the standard one', error);
+        $('#lore_graph_import_file').trigger('click');
+        return;
+    }
+    const files = await Promise.all(handles.map(handle => handle.getFile()));
+    if (files.length) {
+        await onImportFiles(files);
+    }
+}
+
 async function onRemoveImport(entry) {
     const confirmed = await callGenericPopup(`Remove the imported file "${escapeHtml(entry.name)}" and its chunks?`, POPUP_TYPE.CONFIRM);
     if (!confirmed) {
@@ -286,7 +316,7 @@ export async function init() {
     });
 
     $('#lore_graph_rescan').on('click', () => rescan());
-    $('#lore_graph_import').on('click', () => $('#lore_graph_import_file').trigger('click'));
+    $('#lore_graph_import').on('click', onImportClick);
     $('#lore_graph_import_file').on('change', async function () {
         const files = Array.from(this.files ?? []);
         this.value = '';
