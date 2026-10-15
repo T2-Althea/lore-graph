@@ -1042,6 +1042,12 @@ function bindMemory() {
         saveSettingsDebounced();
     });
     bindNumber('#lore_graph_mem_every', 'memory_every', { min: 1, max: 100 });
+    bindNumber('#lore_graph_mem_budget', 'memory_budget', { min: 50, max: 10000 });
+    $('#lore_graph_mem_inject').prop('checked', settings.memory_inject).on('input', function () {
+        settings.memory_inject = !!$(this).prop('checked');
+        saveSettingsDebounced();
+        if (!settings.memory_inject) clearInjection(settings);
+    });
     $('#lore_graph_mem_mode').on('change', function () {
         const memoryState = getMemoryState();
         if (!memoryState) return;
@@ -1102,9 +1108,10 @@ function renderLastInjection() {
     }
     const included = report.chunks.filter(c => c.status === 'full' || c.status === 'tldr').length;
     const sources = [...report.seeds.map(s => s.name), ...(report.meaningHits?.chunks.length ? ['meaning matches'] : [])];
+    const memoryText = report.memory?.selected.length ? ` Plus ${report.memory.selected.length} story memory(ies).` : '';
     el.text(included
-        ? `Last reply (${new Date(report.at).toLocaleTimeString()}): ${included} chunk(s), ${report.tokens} tokens, from ${sources.join(', ')}.`
-        : `Last reply (${new Date(report.at).toLocaleTimeString()}): nothing injected${report.ignored.length ? ` (ignored: ${report.ignored.map(i => i.via).join(', ')})` : ''}.`);
+        ? `Last reply (${new Date(report.at).toLocaleTimeString()}): ${included} chunk(s), ${report.tokens} tokens, from ${sources.join(', ')}.${memoryText}`
+        : `Last reply (${new Date(report.at).toLocaleTimeString()}): no lore injected${report.ignored.length ? ` (ignored: ${report.ignored.map(i => i.via).join(', ')})` : ''}.${memoryText}`);
 }
 
 /** Called by SillyTavern before each generation (see generate_interceptor in manifest.json). */

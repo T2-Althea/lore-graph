@@ -234,3 +234,17 @@ Oct 2026). Paths are relative to the SillyTavern root.
 - Tested on a fake 8-message scene through GLM 5.3 (~28 s): 6 accurate memories; a
   character asleep during a deal was correctly not a witness and recorded as told later.
 - Not injected yet (6b): `mode` single|narrator is stored per chat for that.
+
+## Chat memory, step 6b (sending memories)
+- `memory-retrieval.js selectMemories` (pure): drops replaced memories; single mode keeps
+  only memories the active character (`context.name2`, which is the speaking member in
+  group chats) witnessed, learned, or that everyone knows; narrator mode keeps all and
+  labels each "(known to: …)". Score = recency (+0.5 for the 3 newest) + kind bonus
+  (facts/relationships/people last longer) + 1 per character/lore term mentioned in the
+  scanned messages + 0.6 per lore term matching this reply's lore seeds. Filled to
+  `memory_budget` (600) by score, then listed in story order.
+- Injected as a separate prompt key `6_lore_graph_memory` with the lore block's
+  position/depth/role. The header names the character directly (not the {{char}} macro) and
+  avoids em dashes. Works even when no lore is loaded.
+- Reports and per-reply records gain a "Story memory" section: what was sent and why,
+  and what was hidden because the character didn't witness it.

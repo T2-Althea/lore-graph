@@ -8,9 +8,12 @@ import { loadGraphStore } from './extraction.js';
 import { loadMatching, matchingRevision } from './matching.js';
 import { buildRetrievalIndex, retrieve } from './retrieval.js';
 import { DEFAULT_EMBEDDING_SETTINGS, buildQueryText, semanticSearch } from './embeddings.js';
+import { getMemoryState } from './memory.js';
+import { selectMemories } from './memory-retrieval.js';
 
-/** Prompt key; extension prompts are ordered by key, after Vectors' "3_vectors" / "4_vectors_data_bank". */
+/** Prompt keys; extension prompts are ordered by key, after Vectors' "3_vectors" / "4_vectors_data_bank". */
 export const PROMPT_KEY = '5_lore_graph';
+export const MEMORY_PROMPT_KEY = '6_lore_graph_memory';
 
 export const DEFAULT_INJECTION_SETTINGS = {
     retrieval_messages: 4,
@@ -22,6 +25,8 @@ export const DEFAULT_INJECTION_SETTINGS = {
     inject_scan: false, // let World Info scan the injected lore
     inject_template: 'Relevant world lore for this scene, from the setting\'s codices:\n{{text}}',
     ...DEFAULT_EMBEDDING_SETTINGS,
+    memory_inject: true,  // send the open chat's memories (only does anything once memories exist)
+    memory_budget: 600,
 };
 
 let cache = { key: '', index: null };
@@ -75,11 +80,44 @@ export async function runRetrieval(chunks, messages, settings) {
         budget: settings.retrieval_budget,
     }, (text) => getTokenCountAsync(text), meaning);
     const promptText = report.text ? substituteParamsExtended(settings.inject_template || '{{text}}', { text: report.text }) : '';
-    return { ...report, promptText, scannedMessages, meaningEnabled: !!settings.embed_enabled, meaningError, meaningHits: meaning };
+    const memory = await runMemorySelection(scannedMessages, settings, [...report.seeds, ...(report.meaningSeeds ?? [])].map(s => s.name));
+    return { ...report, promptText, scannedMessages, meaningEnabled: !!settings.embed_enabled, meaningError, meaningHits: meaning, memory };
+}
+
+/** Headers for the "Story so far" block; no em dashes, so the model isn't nudged toward them. */
+const MEMORY_HEADERS = {
+    single: 'Story so far: what [CHARACTER] knows from earlier in this roleplay. These events take priority over the general lore if they conflict.',
+    narrator: 'Story so far: events from earlier in this roleplay, each with who knows it. Characters only know what they witnessed or were told, so keep secrets accordingly. These events take priority over the general lore if they conflict.',
+};
+
+/**
+ * Picks the story memories for this reply (Milestone 6b), or null when memory isn't in use.
+ * @param {string[]} scannedMessages
+ * @param {object} settings
+ * @param {string[]} loreNames lore entities matched for this reply
+ */
+export async function runMemorySelection(scannedMessages, settings, loreNames = []) {
+    if (!settings.memory_inject) return null;
+    const context = SillyTavern.getContext();
+    if (!context.chatId) return null;
+    const state = getMemoryState();
+    if (!state?.memories.length) return null;
+    const character = context.name2;
+    const selection = await selectMemories(state, scannedMessages, {
+        character,
+        loreNames,
+        budget: settings.memory_budget,
+    }, (text) => getTokenCountAsync(text));
+    // The exact character name is used (not the {{char}} macro) so group chats get the right one.
+    const promptText = selection.text
+        ? `${MEMORY_HEADERS[selection.mode].replace('[CHARACTER]', character || 'the character')}\n${selection.text}`
+        : '';
+    return { ...selection, promptText };
 }
 
 export function clearInjection(settings) {
     setExtensionPrompt(PROMPT_KEY, '', settings.inject_position, settings.inject_depth, settings.inject_scan, settings.inject_role);
+    setExtensionPrompt(MEMORY_PROMPT_KEY, '', settings.inject_position, settings.inject_depth, false, settings.inject_role);
 }
 
 /**
@@ -98,17 +136,28 @@ export async function interceptGeneration(chat, type, settings, getChunks) {
     if (!settings.enabled) {
         return null;
     }
-    const chunks = getChunks();
-    if (!chunks.length || !Array.isArray(chat)) {
+    if (!Array.isArray(chat)) {
         return null;
     }
     const messages = chat
         .filter(m => m && !m.is_system && typeof m.mes === 'string')
         .map(m => m.mes)
         .slice(-(settings.retrieval_messages + 1));
-    const report = await runRetrieval(chunks, messages, settings);
+    const chunks = getChunks();
+    let report;
+    if (chunks.length) {
+        report = await runRetrieval(chunks, messages, settings);
+    } else {
+        // No lore loaded: memories can still be sent on their own.
+        const memory = await runMemorySelection(messages, settings);
+        if (!memory) return null;
+        report = { seeds: [], meaningSeeds: [], ignored: [], reached: [], chunks: [], text: '', tokens: 0, promptText: '', scannedMessages: messages, memory };
+    }
     if (report.promptText) {
         setExtensionPrompt(PROMPT_KEY, report.promptText, settings.inject_position, settings.inject_depth, settings.inject_scan, settings.inject_role);
+    }
+    if (report.memory?.promptText) {
+        setExtensionPrompt(MEMORY_PROMPT_KEY, report.memory.promptText, settings.inject_position, settings.inject_depth, false, settings.inject_role);
     }
     return { ...report, type, at: Date.now() };
 }

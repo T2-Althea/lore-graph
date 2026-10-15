@@ -200,7 +200,15 @@
 
             <hr />
             <h4>Chat memory (optional)</h4>
-            <small class="lore_graph_hint">The AI reads new chat messages in batches and writes down events, changed facts, relationships and new people/places, with who witnessed them. Uses the extraction profile above (one AI call per batch). Memories belong to the open chat. They are not sent to the AI yet.</small>
+            <small class="lore_graph_hint">The AI reads new chat messages in batches and writes down events, changed facts, relationships and new people/places, with who witnessed them. Uses the extraction profile above (one AI call per batch). Memories belong to the open chat, and are sent before replies as a "Story so far" block next to the lore.</small>
+            <label class="checkbox_label" for="lore_graph_mem_inject">
+                <input id="lore_graph_mem_inject" type="checkbox" />
+                <span>Send memories to the AI</span>
+            </label>
+            <div class="lore_graph_grid">
+                <label for="lore_graph_mem_budget">Memory token budget</label>
+                <input id="lore_graph_mem_budget" class="text_pole" type="number" min="50" max="10000" step="50" />
+            </div>
             <label class="checkbox_label" for="lore_graph_mem_enabled">
                 <input id="lore_graph_mem_enabled" type="checkbox" />
                 <span>Make memories automatically</span>

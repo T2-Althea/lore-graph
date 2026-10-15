@@ -54,6 +54,14 @@ export function compactReport(report, chunkById) {
             sharedWords: (c.sharedWords ?? []).slice(0, 3),
         })),
         scannedMessages: (report.scannedMessages ?? []).map(m => String(m).slice(0, 200)),
+        memory: report.memory ? {
+            mode: report.memory.mode,
+            character: report.memory.character,
+            tokens: report.memory.tokens,
+            selected: report.memory.selected.map(x => ({ id: x.memory.id, line: x.line, reasons: x.reasons })),
+            hidden: report.memory.hidden.slice(0, 10).map(m => ({ id: m.id, text: m.text })),
+            cutCount: report.memory.cut.length,
+        } : null,
     };
 }
 

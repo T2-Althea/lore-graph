@@ -35,6 +35,24 @@ function renderMeaningSection(report) {
             <ul>${seeds.map(s => `<li><b>${escapeHtml(s.name)}</b> · ${escapeHtml(s.via)} · start score ${s.score.toFixed(2)}</li>`).join('')}</ul>` : ''}`;
 }
 
+/** The "Story memory" part of a report (Milestone 6b). */
+function renderMemorySection(report) {
+    const memory = report.memory;
+    if (!memory) {
+        return '<h4>Story memory</h4><div class="lore_graph_meta">No memories were sent (memory sending is off, or this chat has no memories yet).</div>';
+    }
+    const modeText = memory.mode === 'narrator'
+        ? 'Narrator mode: all memories can be sent, each labelled with who knows it.'
+        : `Single-character mode: only what ${escapeHtml(memory.character ?? '?')} witnessed or was told.`;
+    const cutCount = memory.cutCount ?? memory.cut?.length ?? 0;
+    const hidden = memory.hidden ?? [];
+    const selected = memory.selected.map(s => `<li>${escapeHtml(s.line.replace(/^- /, ''))}${s.reasons?.length ? ` <small>(${escapeHtml(s.reasons.join(', '))})</small>` : ''}</li>`).join('');
+    return `<h4>Story memory</h4>
+        <div class="lore_graph_meta">${modeText} ${memory.selected.length} memory(ies) sent, ${memory.tokens} tokens${cutCount ? `, ${cutCount} left out for budget` : ''}.</div>
+        ${selected ? `<ul>${selected}</ul>` : ''}
+        ${hidden.length ? `<details><summary>${hidden.length} memory(ies) hidden: ${escapeHtml(memory.character ?? '')} didn't witness them and wasn't told</summary><ul>${hidden.map(h => `<li>${escapeHtml(h.text)}</li>`).join('')}</ul></details>` : ''}`;
+}
+
 function ageLabel(age) {
     return age === 0 ? 'newest message' : `${age} message${age === 1 ? '' : 's'} back`;
 }
@@ -76,7 +94,9 @@ export function showRetrievalReport(report, title, onOpenChunk, onShowMap = null
             ${report.chunks.length ? `<table class="lore_graph_table"><thead><tr><th>Status</th><th>Score</th><th>Chunk</th><th>Tokens</th></tr></thead><tbody>${included.map(chunkRow).join('')}</tbody></table>` : '<div class="lore_graph_meta">None.</div>'}
             ${notIncluded.length ? `<details><summary>Not included (${notIncluded.length})</summary><table class="lore_graph_table"><tbody>${notIncluded.slice(0, 40).map(chunkRow).join('')}</tbody></table></details>` : ''}
 
-            <h4>Injected text</h4>
+            ${renderMemorySection(report)}
+
+            <h4>Injected lore text</h4>
             ${report.notice ? `<div class="lore_graph_status_warning">${escapeHtml(report.notice)}</div>` : ''}
             <div class="lore_graph_popup_block lore_graph_meta">${report.promptText ? escapeHtml(report.promptText) : '(nothing)'}</div>
 
