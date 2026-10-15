@@ -323,3 +323,99 @@
 .lore_graph_test_add {
     flex: 1;
 }
+
+/* Graph map (M5) */
+.popup:has(.lore_graph_map) {
+    width: 95dvw !important;
+    max-width: 1800px !important;
+}
+
+.lore_graph_map {
+    display: flex;
+    flex-direction: column;
+    height: calc(90dvh - 80px);
+}
+
+.lore_graph_map_toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+.lore_graph_map_toolbar select,
+.lore_graph_map_toolbar input.text_pole {
+    width: auto;
+    margin: 0;
+}
+
+.lore_graph_map_toolbar .lore_graph_map_focus {
+    min-width: 200px;
+}
+
+.lore_graph_map_body {
+    display: flex;
+    gap: 10px;
+    flex: 1;
+    min-height: 0;
+}
+
+.lore_graph_map_canvas {
+    flex: 3;
+    min-width: 0;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 6px;
+}
+
+.lore_graph_map_side {
+    flex: 1;
+    min-width: 220px;
+    max-width: 380px;
+    overflow-y: auto;
+}
+
+.lore_graph_map_legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    margin-top: 6px;
+    font-size: 0.8em;
+    opacity: 0.85;
+}
+
+.lore_graph_map_key {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.lore_graph_map_key i {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+}
+
+.lore_graph_map_key i.lore_graph_map_key_placeholder {
+    border: 2px dashed #e5a50a;
+    background: transparent;
+}
+
+.lore_graph_map_key i.lore_graph_map_key_guardrail {
+    width: 18px;
+    height: 0;
+    border-radius: 0;
+    border-top: 2px dashed #e53935;
+}
+
+@media (max-width: 768px) {
+    .lore_graph_map_body {
+        flex-direction: column;
+    }
+
+    .lore_graph_map_side {
+        max-width: none;
+        max-height: 30vh;
+    }
+}

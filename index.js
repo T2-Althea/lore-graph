@@ -17,6 +17,7 @@ import { showRetrievalReport } from './report-view.js';
 import { loadEmbeddingState, semanticSearch, syncEmbeddingIndex } from './embeddings.js';
 import { addMessageButtons, attachPendingReport, expandRecord, getRecord, setPendingReport } from './inspector.js';
 import { editTestPopup, loadTests, runTest, saveTests, showTestList } from './tests.js';
+import { highlightFromReport, showGraphMap } from './graph-map.js';
 
 const MODULE_NAME = 'lore_graph';
 const EXTENSION_FOLDER = 'third-party/lore-graph';
@@ -643,6 +644,41 @@ async function onBrowse() {
     });
 }
 
+/** The graph for the current chat's lore, or null (with a message) if there's none. */
+async function getCurrentGraph() {
+    const store = await loadStoreOrWarn();
+    if (!store) return null;
+    const graph = buildGraph(store, getCurrentChunks().map(c => c.id));
+    if (!graph.entities.length) {
+        toastr.info('The graph is empty. Run extraction first.', 'Lore Graph');
+        return null;
+    }
+    return graph;
+}
+
+async function openGraphMap() {
+    const graph = await getCurrentGraph();
+    if (graph) showGraphMap(graph, { onOpenChunk: openChunkById });
+}
+
+/** Opens the map showing what a lore report matched and the paths it followed. */
+async function openMapForReport(report) {
+    const graph = await getCurrentGraph();
+    if (!graph) return;
+    const idByName = new Map();
+    for (const entity of graph.entities) {
+        for (const name of [entity.name, ...entity.aliases]) {
+            if (!idByName.has(name.toLowerCase())) idByName.set(name.toLowerCase(), entity.id);
+        }
+    }
+    const highlight = highlightFromReport(report, idByName);
+    if (!highlight.nodes.size) {
+        toastr.info('Nothing from this report is in the current graph.', 'Lore Graph');
+        return;
+    }
+    showGraphMap(graph, { onOpenChunk: openChunkById, highlight, title: 'Why this lore was chosen' });
+}
+
 async function onFindDuplicates() {
     if (state.extraction) return;
     const settings = getSettings();
@@ -795,7 +831,7 @@ async function onTestRetrieval() {
         const report = await runRetrieval(chunks, messages, getSettings());
         state.lastTest = { text, report };
         $('#lore_graph_save_test').removeClass('disabled');
-        showRetrievalReport(report, 'Test retrieval', openChunkById);
+        showRetrievalReport(report, 'Test retrieval', openChunkById, openMapForReport);
     } catch (error) {
         console.error('Lore Graph: test retrieval failed', error);
         toastr.error(String(error?.message ?? error), 'Lore Graph');
@@ -816,7 +852,7 @@ async function onMessageLoreClick() {
         return;
     }
     const report = expandRecord(record, getChunkMap(), getSettings().inject_template);
-    showRetrievalReport(report, `Lore for message #${messageId}`, openChunkById);
+    showRetrievalReport(report, `Lore for message #${messageId}`, openChunkById, openMapForReport);
 }
 
 async function getTests() {
@@ -857,7 +893,7 @@ async function runOneTest(test) {
 }
 
 const testListHandlers = {
-    onOpenReport: (report, title) => showRetrievalReport(report, title, openChunkById),
+    onOpenReport: (report, title) => showRetrievalReport(report, title, openChunkById, openMapForReport),
     onRun: runOneTest,
     onEdit: async (test) => {
         const edited = await editTestPopup(test, getCurrentChunks().map(c => c.id), { title: 'Edit test' });
@@ -1039,7 +1075,7 @@ function bindRetrievalSettings() {
             toastr.info('No reply has been generated with Lore Graph enabled yet in this session.', 'Lore Graph');
             return;
         }
-        showRetrievalReport(state.lastReport, 'Last injection', openChunkById);
+        showRetrievalReport(state.lastReport, 'Last injection', openChunkById, openMapForReport);
     });
     $('#lore_graph_everyday').on('click', onEverydayCheck);
     renderLastInjection();
@@ -1247,6 +1283,7 @@ export async function init() {
     $('#lore_graph_extract_all').on('click', () => onExtract('all'));
     $('#lore_graph_stop').on('click', () => state.extraction?.abort());
     $('#lore_graph_browse').on('click', onBrowse);
+    $('#lore_graph_map').on('click', openGraphMap);
     $('#lore_graph_dupes_find').on('click', onFindDuplicates);
     $('#lore_graph_dupes_review').on('click', onReviewDuplicates);
     bindRetrievalSettings();

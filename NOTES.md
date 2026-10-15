@@ -203,3 +203,15 @@ Oct 2026). Paths are relative to the SillyTavern root.
 - Meaning-search safety rules found while building M4: entity-only meaning hits need
   other evidence (a chunk meaning hit or any lore name), and with no lore names at all,
   weak chunk hits alone are ignored. 14 short casual lines tested: all inject nothing.
+
+## Graph map (M5)
+- Library: Cytoscape.js 3.30.2, `lib/cytoscape.min.js` (MIT), downloaded from the official
+  npm package via unpkg; sha256 83e8c54a…dac81 verified identical on jsDelivr. Loaded
+  on first use with a plain <script> tag (defines window.cytoscape).
+- Views: around one entity (1–2 steps, concentric), whole graph (cose; ~1.3 s for 361
+  nodes), and "this reply's lore" from any report's "Show on map": seeds in the centre,
+  meaning seeds next, then only the entities that earned each sent chunk its place,
+  with their paths in green and dotted "section mentions term" links for definition pulls.
+- Styling: color by type, size by chunk count, placeholders hollow/dashed orange,
+  contrasts_with/exception_to dashed red, related_to faint. Hubs (> 8 chunks) are hidden by
+  default. Zoom is capped at 1.2 after fitting so labels stay readable.

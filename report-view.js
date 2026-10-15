@@ -44,7 +44,7 @@ function ageLabel(age) {
  * @param {string} title
  * @param {(chunkId: string) => void} onOpenChunk
  */
-export function showRetrievalReport(report, title, onOpenChunk) {
+export function showRetrievalReport(report, title, onOpenChunk, onShowMap = null) {
     const included = report.chunks.filter(c => c.status === 'full' || c.status === 'tldr');
     const notIncluded = report.chunks.filter(c => c.status === 'cut' || c.status === 'below threshold');
 
@@ -60,6 +60,7 @@ export function showRetrievalReport(report, title, onOpenChunk) {
     const root = $(`
         <div class="lore_graph_popup lore_graph_report">
             <h3>${escapeHtml(title)}</h3>
+            ${onShowMap && report.seeds.length + (report.meaningSeeds?.length ?? 0) ? '<div class="menu_button menu_button_icon lore_graph_report_map"><i class="fa-solid fa-diagram-project"></i><span>Show on map</span></div>' : ''}
             <div class="lore_graph_meta">${included.length} chunk(s) injected · ${report.tokens} tokens${report.type ? ` · generation type: ${escapeHtml(report.type)}` : ''}${report.at ? ` · ${new Date(report.at).toLocaleTimeString()}` : ''}</div>
 
             <h4>Matched by name</h4>
@@ -83,5 +84,6 @@ export function showRetrievalReport(report, title, onOpenChunk) {
         </div>`);
 
     root.on('click', '.lore_graph_report_chunk', function () { onOpenChunk(String($(this).data('chunk'))); });
+    root.on('click', '.lore_graph_report_map', () => onShowMap?.(report));
     return callGenericPopup(root, POPUP_TYPE.TEXT, '', { wider: true, leftAlign: true, allowVerticalScrolling: true, okButton: 'Close' });
 }
