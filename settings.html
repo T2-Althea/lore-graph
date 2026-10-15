@@ -9,7 +9,27 @@
                 <input id="lore_graph_enabled" type="checkbox" />
                 <span>Enabled</span>
             </label>
-            <small class="lore_graph_placeholder">Nothing here yet (Milestone 0).</small>
+
+            <hr />
+            <h4>Lore sources</h4>
+            <small class="lore_graph_hint">Lore files from the Data Bank (global, this character, this chat) and files imported here. Disabled Data Bank files are ignored.</small>
+            <div class="flex-container">
+                <div id="lore_graph_rescan" class="menu_button menu_button_icon" title="Re-read the Data Bank and parse new or changed files">
+                    <i class="fa-solid fa-rotate"></i>
+                    <span>Rescan Data Bank</span>
+                </div>
+                <div id="lore_graph_import" class="menu_button menu_button_icon" title="Import a lore .txt file into the extension's own storage">
+                    <i class="fa-solid fa-file-import"></i>
+                    <span>Import file…</span>
+                </div>
+                <input id="lore_graph_import_file" type="file" accept=".txt,text/plain" multiple hidden />
+            </div>
+            <div id="lore_graph_status" class="lore_graph_status"></div>
+            <div id="lore_graph_sources" class="lore_graph_sources"></div>
+
+            <hr />
+            <h4>Chunks</h4>
+            <div id="lore_graph_chunks" class="lore_graph_chunks"></div>
         </div>
     </div>
 </div>

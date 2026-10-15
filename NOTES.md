@@ -99,3 +99,19 @@ Oct 2026). Paths are relative to the SillyTavern root.
 - Line 1 = title, line 2 = `Doc ID: COS-00X`; first section has no leading `---`.
 - Guardrail blocks (`✕ Not This`) can appear before a section's first `#`
   subsection (e.g. Guild §2), so they belong to the intro chunk.
+
+## Chunk index (M1)
+- Stored in `data/<user>/user/files/lore-graph_chunks.json`:
+  `{ version, docs: { [fileUrl]: { url, name, scope, status, docId, title, textHash,
+  parserVersion, chunks[], warnings[], error, duplicateOf } } }`.
+- Keyed by file URL. Data Bank files get a new URL when edited; we also compare a
+  text hash and `PARSER_VERSION`, so changed files (or a parser update) re-parse.
+- Entries for character/chat-scoped files stay in the index when you switch chats
+  (shown greyed as "not active"), so later extraction work isn't thrown away.
+  `FILE_ATTACHMENT_DELETED` removes an entry; a Forget button removes stale ones.
+- Manual imports are saved as `lore-graph_import_<name>_<time>.txt` with scope
+  `imported`; they don't touch the Data Bank.
+- Duplicate Doc IDs: the first active source wins (global → character → chat →
+  imported); the other is shown with an error and its chunks aren't used.
+- Token counts come from `getTokenCountAsync` (the current API's tokenizer), so
+  exact counts — and whether a long section splits — can vary by model.
