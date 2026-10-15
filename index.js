@@ -18,6 +18,8 @@ import { loadEmbeddingState, semanticSearch, syncEmbeddingIndex } from './embedd
 import { addMessageButtons, attachPendingReport, expandRecord, getRecord, setPendingReport } from './inspector.js';
 import { editTestPopup, loadTests, runTest, saveTests, showTestList } from './tests.js';
 import { highlightFromReport, showGraphMap } from './graph-map.js';
+import { countUnprocessed, extractMemories, getMemoryState, saveMemoryState, validateMemories } from './memory.js';
+import { showMemoryList } from './memory-view.js';
 
 const MODULE_NAME = 'lore_graph';
 const EXTENSION_FOLDER = 'third-party/lore-graph';
@@ -32,6 +34,9 @@ const defaultSettings = {
     extraction_structured_output: true,
     ...DEFAULT_INJECTION_SETTINGS,
     record_injections: true,
+    memory_enabled: false,
+    memory_every: 6,
+    memory_profile: '',
 };
 
 /** Runtime state (not saved in settings). */
@@ -974,6 +979,96 @@ async function onOpenTestList() {
     showTestList(tests, null, testListHandlers);
 }
 
+// ---------------------------------------------------------------- chat memory (M6a)
+
+function renderMemoryStatus(extra = '') {
+    const memoryState = getMemoryState();
+    const el = $('#lore_graph_mem_status');
+    if (!memoryState || !SillyTavern.getContext().chatId) {
+        el.text('Open a chat to use memory.');
+        return;
+    }
+    $('#lore_graph_mem_mode').val(memoryState.mode);
+    const active = memoryState.memories.filter(m => !m.superseded).length;
+    const waiting = countUnprocessed();
+    el.text(`${extra ? extra + ' ' : ''}${active} memories in this chat · ${waiting} new message(s) not read yet.`);
+}
+
+/**
+ * Reads unprocessed messages into memories.
+ * @param {{ quiet?: boolean }} [options] quiet = automatic run (no toast unless something went wrong)
+ */
+async function runMemory({ quiet = false } = {}) {
+    if (state.memoryRunning) return;
+    if (!SillyTavern.getContext().chatId) {
+        if (!quiet) toastr.info('Open a chat first.', 'Lore Graph');
+        return;
+    }
+    state.memoryRunning = true;
+    const button = $('#lore_graph_mem_run').addClass('disabled');
+    $('#lore_graph_mem_status').text('Reading recent messages…');
+    try {
+        validateMemories();
+        const result = await extractMemories(getSettings());
+        const summary = result.read
+            ? `Read ${result.read} message(s): ${result.added} new memory(ies)${result.learned ? `, ${result.learned} "learned later"` : ''}.`
+            : 'No new messages to read.';
+        renderMemoryStatus(summary);
+        if (!quiet) toastr.success(summary, 'Lore Graph: memory');
+    } catch (error) {
+        console.error('Lore Graph: making memories failed', error);
+        renderMemoryStatus(`Last attempt failed: ${error?.message ?? error}`);
+        toastr.warning(String(error?.message ?? error), 'Lore Graph: memory');
+    } finally {
+        state.memoryRunning = false;
+        button.removeClass('disabled');
+    }
+}
+
+function onChatHistoryChanged() {
+    try {
+        const removed = validateMemories();
+        if (removed) toastr.info(`${removed} memory(ies) removed because their messages were deleted, edited or swiped away.`, 'Lore Graph');
+        renderMemoryStatus();
+    } catch (error) {
+        console.error('Lore Graph: checking memories failed', error);
+    }
+}
+
+function bindMemory() {
+    const settings = getSettings();
+    $('#lore_graph_mem_enabled').prop('checked', settings.memory_enabled).on('input', function () {
+        settings.memory_enabled = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+    bindNumber('#lore_graph_mem_every', 'memory_every', { min: 1, max: 100 });
+    $('#lore_graph_mem_mode').on('change', function () {
+        const memoryState = getMemoryState();
+        if (!memoryState) return;
+        memoryState.mode = String($(this).val()) === 'narrator' ? 'narrator' : 'single';
+        saveMemoryState();
+    });
+    $('#lore_graph_mem_run').on('click', () => runMemory());
+    $('#lore_graph_mem_list').on('click', () => {
+        validateMemories();
+        showMemoryList(() => renderMemoryStatus());
+    });
+
+    eventSource.on(event_types.MESSAGE_RECEIVED, (_messageId, type) => {
+        const current = getSettings();
+        if (type === 'quiet' || !current.memory_enabled || !current.memory_every) return;
+        // Run in the background once enough new messages have built up.
+        setTimeout(() => {
+            if (countUnprocessed() >= current.memory_every) runMemory({ quiet: true });
+            else renderMemoryStatus();
+        }, 500);
+    });
+    for (const event of [event_types.MESSAGE_DELETED, event_types.MESSAGE_EDITED, event_types.MESSAGE_SWIPED, event_types.CHAT_CHANGED]) {
+        eventSource.on(event, onChatHistoryChanged);
+    }
+    renderMemoryStatus();
+}
+
 function bindInspectorAndTests() {
     const settings = getSettings();
     $('#lore_graph_record').prop('checked', settings.record_injections).on('input', function () {
@@ -1081,6 +1176,7 @@ function bindRetrievalSettings() {
     renderLastInjection();
     bindEmbeddingSettings();
     bindInspectorAndTests();
+    bindMemory();
 }
 
 // ---------------------------------------------------------------- meaning search (M3b)

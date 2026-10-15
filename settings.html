@@ -197,6 +197,34 @@
                 </div>
             </div>
             <div id="lore_graph_tests_summary" class="lore_graph_status"></div>
+
+            <hr />
+            <h4>Chat memory (optional)</h4>
+            <small class="lore_graph_hint">The AI reads new chat messages in batches and writes down events, changed facts, relationships and new people/places, with who witnessed them. Uses the extraction profile above (one AI call per batch). Memories belong to the open chat. They are not sent to the AI yet.</small>
+            <label class="checkbox_label" for="lore_graph_mem_enabled">
+                <input id="lore_graph_mem_enabled" type="checkbox" />
+                <span>Make memories automatically</span>
+            </label>
+            <div class="lore_graph_grid">
+                <label for="lore_graph_mem_every">Every this many new messages</label>
+                <input id="lore_graph_mem_every" class="text_pole" type="number" min="1" max="100" step="1" />
+            </div>
+            <label for="lore_graph_mem_mode">In this chat, the AI plays</label>
+            <select id="lore_graph_mem_mode" class="text_pole">
+                <option value="single">One character (they only know what they witnessed or were told)</option>
+                <option value="narrator">A narrator / many characters (memories are labelled with who knows them)</option>
+            </select>
+            <div class="flex-container">
+                <div id="lore_graph_mem_run" class="menu_button menu_button_icon" title="Read the messages not processed yet and make memories now (one AI call)">
+                    <i class="fa-solid fa-brain"></i>
+                    <span>Remember recent events</span>
+                </div>
+                <div id="lore_graph_mem_list" class="menu_button menu_button_icon">
+                    <i class="fa-solid fa-book-bookmark"></i>
+                    <span>Open memory list</span>
+                </div>
+            </div>
+            <div id="lore_graph_mem_status" class="lore_graph_status"></div>
         </div>
     </div>
 </div>

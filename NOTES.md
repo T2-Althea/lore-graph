@@ -215,3 +215,22 @@ Oct 2026). Paths are relative to the SillyTavern root.
 - Styling: color by type, size by chunk count, placeholders hollow/dashed orange,
   contrasts_with/exception_to dashed red, related_to faint. Hubs (> 8 chunks) are hidden by
   default. Zoom is capped at 1.2 after fitting so labels stay readable.
+
+## Chat memory, step 6a
+- Stored per chat in `chat_metadata.lore_graph_memory` ({ processedUpTo, mode, nextId,
+  memories[] }), so memories follow branches/checkpoints and die with the chat.
+  Saved with `context.saveMetadataDebounced()`.
+- `extractMemories`: one LLM call per batch of unread messages (auto every N on
+  MESSAGE_RECEIVED when enabled, or the "Remember recent events" button). Prompt gets
+  people in the chat, story characters seen so far, the last 20 memories (with ids, for
+  "supersedes" and "learned"), 3 earlier messages for context, and the new messages
+  tagged [#index]. Memory = { kind event|fact|relationship|entity, text, characters,
+  witnesses, learned[{name, from, atMessage, hash}], everyone, loreTerms, sources
+  [{index, hash}], supersedes, superseded, edited }.
+- `validateMemories` (on MESSAGE_DELETED/EDITED/SWIPED, CHAT_CHANGED): drops memories
+  whose source messages changed or vanished, drops "learned" entries whose message
+  changed, moves processedUpTo back so changed messages are re-read. User-edited memories
+  are kept. Results are discarded if the chat changes during the AI call.
+- Tested on a fake 8-message scene through GLM 5.3 (~28 s): 6 accurate memories; a
+  character asleep during a deal was correctly not a witness and recorded as told later.
+- Not injected yet (6b): `mode` single|narrator is stored per chat for that.

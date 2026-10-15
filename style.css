@@ -419,3 +419,19 @@
         max-height: 30vh;
     }
 }
+
+/* Chat memory (M6a) */
+.lore_graph_mem_filters select,
+.lore_graph_mem_filters input[type="search"] {
+    width: auto;
+    margin: 0;
+}
+
+.lore_graph_mem_replaced {
+    opacity: 0.55;
+}
+
+.lore_graph_memory_editor textarea,
+.lore_graph_memory_editor input.text_pole {
+    width: 100%;
+}
