@@ -127,6 +127,36 @@
                 <span>Let World Info scan the injected lore</span>
             </label>
 
+            <hr />
+            <h4>Meaning search (embeddings)</h4>
+            <small class="lore_graph_hint">Finds lore by meaning, not just by names, using an embedding model on your own computer (LM Studio). Matches by meaning count less than matches by name.</small>
+            <label class="checkbox_label" for="lore_graph_embed_enabled">
+                <input id="lore_graph_embed_enabled" type="checkbox" />
+                <span>Use meaning search</span>
+            </label>
+            <label for="lore_graph_embed_url">LM Studio address</label>
+            <input id="lore_graph_embed_url" class="text_pole" type="text" placeholder="http://127.0.0.1:1234" />
+            <label for="lore_graph_embed_model">Embedding model (as LM Studio names it)</label>
+            <input id="lore_graph_embed_model" class="text_pole" type="text" placeholder="text-embedding-qwen3-embedding-4b@q8_0" />
+            <div class="lore_graph_grid">
+                <label for="lore_graph_embed_top_k">Closest matches to use</label>
+                <input id="lore_graph_embed_top_k" class="text_pole" type="number" min="1" max="20" step="1" />
+                <label for="lore_graph_embed_threshold">Similarity threshold (0–1)</label>
+                <input id="lore_graph_embed_threshold" class="text_pole" type="number" min="0" max="1" step="0.01" />
+            </div>
+            <div class="flex-container">
+                <div id="lore_graph_embed_build" class="menu_button menu_button_icon" title="Embed new or changed chunks and entities (runs on your computer, no cost)">
+                    <i class="fa-solid fa-layer-group"></i>
+                    <span>Build / update index</span>
+                </div>
+                <div id="lore_graph_embed_check" class="menu_button menu_button_icon" title="Run the standard test searches and show what comes back">
+                    <i class="fa-solid fa-stethoscope"></i>
+                    <span>Sanity check</span>
+                </div>
+            </div>
+            <div id="lore_graph_embed_status" class="lore_graph_status"></div>
+
+            <hr />
             <label for="lore_graph_test_input">Test retrieval (nothing is sent to the AI)</label>
             <textarea id="lore_graph_test_input" class="text_pole textarea_compact" rows="2" placeholder="e.g. I slid my plate across to the checkpoint clerk."></textarea>
             <div class="flex-container">

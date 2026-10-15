@@ -14,6 +14,12 @@ export const DEFAULT_RETRIEVAL_SETTINGS = {
     hopFactor: 0.5,       // score multiplier per relationship step
     directBonus: 1.25,    // chunks that mention a matched entity directly
     wordBonus: 1.0,       // up to this much extra for chunks sharing distinctive words with the messages
+    meaningSeedScore: 0.6, // start score of the best meaning-search hit (name matches start at 1.0)
+    weakMeaningFactor: 0.5, // chunk meaning hits that pass the threshold but not the stricter "strong" check
+    entityMeaningFactor: 0.5, // entity meaning hits (short descriptions match more loosely than chunks)
+    definitionPull: 0.35,  // share of a top chunk's score given to sections defining specific terms it uses
+    definitionPullTop: 2,  // how many top chunks pull in definitions
+    definitionPullMinHub: 0.5, // skip terms found in more than 4 chunks (hub factor below 0.5)
     minRelativeScore: 0.08, // drop chunks scoring under this share of the best chunk
     minAliasLength: 4,    // shorter names are ignored unless marked safe
 };
@@ -144,7 +150,16 @@ export function buildRetrievalIndex(graph, chunks, matching, { minAliasLength = 
     // Hub entities appear in many chunks ("Guild", "manacite"); they spread less relevance.
     const hub = new Map(entities.map(e => [e.id, 1 / Math.max(1, Math.log2(e.sourceChunks.filter(id => chunkIds.has(id)).length))]));
 
-    return { entities, byId, adjacency, names, tooShort, hub, chunkWords, idf, chunkById: new Map(chunks.map(c => [c.id, c])) };
+    /** @type {Map<string, import('./graph.js').Entity[]>} chunk id -> entities it mentions or defines */
+    const entitiesByChunk = new Map();
+    for (const entity of entities) {
+        for (const chunkId of entity.sourceChunks) {
+            if (!entitiesByChunk.has(chunkId)) entitiesByChunk.set(chunkId, []);
+            entitiesByChunk.get(chunkId).push(entity);
+        }
+    }
+
+    return { entities, byId, adjacency, names, tooShort, hub, chunkWords, entitiesByChunk, idf, chunkById: new Map(chunks.map(c => [c.id, c])) };
 }
 
 // Common words that carry no topic. Short words (under 4 letters) are skipped anyway.
@@ -179,9 +194,11 @@ function contentWords(text) {
  * @param {string[]} messages oldest first; the last one is the newest
  * @param {object} settings DEFAULT_RETRIEVAL_SETTINGS overrides
  * @param {(text: string) => number|Promise<number>} countTokens
+ * @param {{ chunks: { id: string, rank: number }[], entities: { id: string, rank: number }[] }|null} [meaning]
+ *   meaning-search hits (best first), or null when meaning search is off or failed
  * @returns {Promise<RetrievalReport>}
  */
-export async function retrieve(index, messages, settings, countTokens) {
+export async function retrieve(index, messages, settings, countTokens, meaning = null) {
     const s = { ...DEFAULT_RETRIEVAL_SETTINGS, ...settings };
     const scanned = messages.slice(-(s.messages + 1));
 
@@ -227,6 +244,33 @@ export async function retrieve(index, messages, settings, countTokens) {
     /** @type {Map<string, { score: number, path: string[] }>} */
     const scores = new Map(seeds.map(seed => [seed.entityId, { score: seed.score, path: [seed.entityId] }]));
 
+    // ---- 3b. Meaning seeds (embeddings): weaker than name matches, never vouch for everyday words ----
+    const meaningSeeds = [];
+    /** @type {Map<string, number>} chunk id -> direct score from a meaning hit */
+    const meaningChunks = new Map();
+    const addMeaningSeed = (entityId, score, via) => {
+        const entity = index.byId.get(entityId);
+        if (!entity || score <= (scores.get(entityId)?.score ?? 0)) return;
+        scores.set(entityId, { score, path: [entityId] });
+        meaningSeeds.push({ entityId, name: entity.name, via, score });
+    };
+    // 1st 1.0, 2nd 0.85, 3rd 0.7…; hits that only just cleared the threshold count half.
+    const hitFactor = (rank, weak) => Math.max(0.5, 1 - 0.15 * rank) * (weak ? s.weakMeaningFactor : 1);
+    // Entity descriptions are one short sentence, so their matches are looser than chunk matches.
+    for (const { id, rank } of meaning?.entities ?? []) {
+        addMeaningSeed(id, s.meaningSeedScore * hitFactor(rank, false) * s.entityMeaningFactor, `entity match #${rank + 1}`);
+    }
+    for (const { id, rank, weak } of meaning?.chunks ?? []) {
+        const chunk = index.chunkById.get(id);
+        if (!chunk) continue;
+        const score = s.meaningSeedScore * hitFactor(rank, weak);
+        meaningChunks.set(id, score);
+        // The entities a matched chunk defines carry its meaning into the graph, more weakly.
+        for (const entity of index.entities) {
+            if (entity.definedIn.includes(id)) addMeaningSeed(entity.id, score * 0.5, `defined in ${id} (chunk match #${rank + 1}${weak ? ', weak' : ''})`);
+        }
+    }
+
     // ---- 4. Expand through relationships ----
     let frontier = new Map(scores);
     for (let hop = 1; hop <= s.hops && frontier.size; hop++) {
@@ -254,6 +298,9 @@ export async function retrieve(index, messages, settings, countTokens) {
     const seedIds = new Set(seeds.map(seed => seed.entityId));
     /** @type {Map<string, { score: number, direct: boolean, reasons: any[] }>} */
     const chunkScores = new Map();
+    for (const [chunkId, score] of meaningChunks) {
+        chunkScores.set(chunkId, { score, direct: true, meaning: true, reasons: [{ entityId: '', name: 'meaning match', amount: score, defined: true }] });
+    }
     for (const [id, { score }] of scores) {
         const entity = index.byId.get(id);
         for (const chunkId of entity.sourceChunks) {
@@ -287,6 +334,32 @@ export async function retrieve(index, messages, settings, countTokens) {
             entry.score *= 1 + s.wordBonus * Math.min(1, overlap);
         }
         entry.reasons.sort((a, b) => b.amount - a.amount);
+    }
+
+    // ---- 5b. Definitions the top chunks rely on ----
+    // When a top chunk uses a specific term that another section defines, that section is likely
+    // needed too ("file a field exception report" in Dungeon §16 → Guild §5 defines it).
+    // Hub terms ("Guild", "dungeon") are skipped so this can't flood the budget.
+    if (s.definitionPull > 0) {
+        const top = [...chunkScores].sort((a, b) => b[1].score - a[1].score).slice(0, s.definitionPullTop);
+        /** @type {Map<string, { amount: number, name: string, from: string }>} */
+        const pulls = new Map();
+        for (const [chunkId, entry] of top) {
+            for (const entity of index.entitiesByChunk.get(chunkId) ?? []) {
+                if (entity.definedIn.includes(chunkId) || index.hub.get(entity.id) < s.definitionPullMinHub) continue;
+                for (const definingChunk of entity.definedIn) {
+                    if (definingChunk === chunkId || !index.chunkById.has(definingChunk)) continue;
+                    const amount = entry.score * s.definitionPull * index.hub.get(entity.id);
+                    if (amount > (pulls.get(definingChunk)?.amount ?? 0)) pulls.set(definingChunk, { amount, name: entity.name, from: chunkId });
+                }
+            }
+        }
+        for (const [chunkId, { amount, name, from }] of pulls) {
+            const entry = chunkScores.get(chunkId) ?? { score: 0, direct: false, reasons: [], sharedWords: [] };
+            entry.score += amount;
+            entry.reasons.unshift({ entityId: '', name: `defines "${name}", used in ${from}`, amount, defined: true });
+            chunkScores.set(chunkId, entry);
+        }
     }
 
     // ---- 6. Fill the token budget ----
@@ -331,8 +404,9 @@ export async function retrieve(index, messages, settings, countTokens) {
         }
     }
 
+    const meaningSeedIds = new Set(meaningSeeds.map(seed => seed.entityId));
     const reached = [...scores]
-        .filter(([id]) => !seedIds.has(id))
+        .filter(([id]) => !seedIds.has(id) && !meaningSeedIds.has(id))
         .map(([id, { score, path }]) => ({
             entityId: id,
             name: index.byId.get(id).name,
@@ -341,5 +415,5 @@ export async function retrieve(index, messages, settings, countTokens) {
         }))
         .sort((a, b) => b.score - a.score);
 
-    return { seeds, ignored, reached, chunks, text: parts.join('\n\n'), tokens: used };
+    return { seeds, meaningSeeds, meaningChunks: [...meaningChunks.keys()], ignored, reached, chunks, text: parts.join('\n\n'), tokens: used };
 }

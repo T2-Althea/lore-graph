@@ -22,6 +22,7 @@ ENTITIES: the setting-specific things in this chunk that a roleplayer might need
 - Include named things and terms the lore gives a specific in-world meaning (e.g. "Rank Plate", "deep core", "Aberrant Labyrinth", "undead", "manacite").
 - Do NOT include everyday words or generic descriptive phrases (e.g. "route", "vacancy", "weight", "contract budget", "dead quiet", "careless extraction") unless the lore treats them as a defined term.
 - Prefer fewer, meaningful entities: usually 3 to 10 per chunk.
+- Always include the main subject named in the section or subsection title (e.g. "Undead" for "Undead In Dungeons", "Rank Plate" for "The Rank Plate"), with defined_here true.
 For each entity:
 - "name": the canonical name. If it is in the known entity list, use EXACTLY that name.
 - "type": one of ${ENTITY_TYPES.join(', ')}. Use Concept only if nothing else fits.

@@ -14,6 +14,7 @@ import { applyEverydayReview, findEverydayWords, loadMatching, setAliasSafe, set
 import { DEFAULT_RETRIEVAL_SETTINGS, getMatchMode, getNameModes } from './retrieval.js';
 import { matchForm } from './schema.js';
 import { showRetrievalReport } from './report-view.js';
+import { loadEmbeddingState, semanticSearch, syncEmbeddingIndex } from './embeddings.js';
 
 const MODULE_NAME = 'lore_graph';
 const EXTENSION_FOLDER = 'third-party/lore-graph';
@@ -875,6 +876,141 @@ function bindRetrievalSettings() {
     });
     $('#lore_graph_everyday').on('click', onEverydayCheck);
     renderLastInjection();
+    bindEmbeddingSettings();
+}
+
+// ---------------------------------------------------------------- meaning search (M3b)
+
+async function renderEmbeddingStatus() {
+    const settings = getSettings();
+    const el = $('#lore_graph_embed_status');
+    let state = null;
+    try {
+        state = await loadEmbeddingState({ fresh: true });
+    } catch (error) {
+        el.text(`Could not read the meaning index file: ${error?.message ?? error}`);
+        return;
+    }
+    if (!state) {
+        el.text('No meaning index yet. Fill in the model name, then click "Build / update index".');
+        return;
+    }
+    const chunkIds = new Set(getCurrentChunks().map(c => c.id));
+    const indexed = new Set(Object.values(state.chunks));
+    const missing = [...chunkIds].filter(id => !indexed.has(id)).length;
+    let text = `Index built ${new Date(state.builtAt).toLocaleString()} with ${state.model}: ${Object.keys(state.chunks).length} chunks, ${Object.keys(state.entities).length} entities.`;
+    if (state.model !== settings.embed_model) {
+        text += ` ⚠ The selected model is different ("${settings.embed_model || 'none'}"). Rebuild the index to use it.`;
+    } else if (missing) {
+        text += ` ${missing} current chunk(s) not indexed yet; click "Build / update index".`;
+    }
+    el.text(text);
+}
+
+async function onBuildEmbeddingIndex() {
+    if (state.embedBuilding) return;
+    const settings = getSettings();
+    if (!settings.embed_model) {
+        toastr.warning('Enter the embedding model name first (as LM Studio shows it).', 'Lore Graph');
+        return;
+    }
+    const chunks = getCurrentChunks();
+    if (!chunks.length) {
+        toastr.info('No chunks loaded. Click Rescan first.', 'Lore Graph');
+        return;
+    }
+    const store = await loadStoreOrWarn();
+    if (!store) return;
+    const entities = buildGraph(store, chunks.map(c => c.id)).entities;
+
+    const previous = await loadEmbeddingState({ fresh: true }).catch(() => null);
+    if (previous && previous.model !== settings.embed_model) {
+        const confirmed = await callGenericPopup(
+            `<div class="lore_graph_popup"><h3>Different embedding model</h3><p>The current index was built with <b>${escapeHtml(previous.model)}</b>. Building with <b>${escapeHtml(settings.embed_model)}</b> embeds everything again (on your computer, no cost). The old index is kept, so switching back later is instant.</p></div>`,
+            POPUP_TYPE.CONFIRM, '', { okButton: 'Build', cancelButton: 'Cancel' });
+        if (confirmed !== POPUP_RESULT.AFFIRMATIVE) return;
+    }
+
+    state.embedBuilding = true;
+    const button = $('#lore_graph_embed_build').addClass('disabled');
+    const statusEl = $('#lore_graph_embed_status');
+    statusEl.text('Checking what needs embedding…');
+    try {
+        const result = await syncEmbeddingIndex(chunks, entities, settings,
+            (stage, done, total) => statusEl.text(`Embedding ${stage}: ${done} / ${total}…`));
+        invalidateRetrievalCache();
+        toastr.success(`Chunks: ${result.chunks.added} added, ${result.chunks.removed} removed. Entities: ${result.entities.added} added, ${result.entities.removed} removed.`, 'Lore Graph: meaning index updated');
+        await renderEmbeddingStatus();
+    } catch (error) {
+        console.error('Lore Graph: building the meaning index failed', error);
+        statusEl.text(String(error?.message ?? error));
+        toastr.error(String(error?.message ?? error), 'Lore Graph');
+    } finally {
+        state.embedBuilding = false;
+        button.removeClass('disabled');
+    }
+}
+
+/** Test searches from CLAUDE.md: [query, chunk ids expected near the top]. */
+const SANITY_QUERIES = [
+    ['handing my rank plate to the checkpoint clerk', ['COS-006 §7 The Rank Plate']],
+    ['The stone down here feels wrong. It reads like someone, not something.', ['COS-004 §15 Aberrant Labyrinths', 'COS-004 §3 Ambient Reading']],
+    ['Haha, nice weather today. Want to grab some food and talk about your family?', []],
+];
+
+async function onEmbeddingSanityCheck() {
+    const settings = getSettings();
+    const button = $('#lore_graph_embed_check').addClass('disabled');
+    try {
+        const rows = [];
+        for (const [query, expected] of SANITY_QUERIES) {
+            // Top 5 regardless of threshold to see the ranking, plus the real threshold to see what would be used.
+            const wide = await semanticSearch(query, settings, { topK: 5, threshold: 0 });
+            const used = await semanticSearch(query, settings);
+            const usedIds = new Set(used.chunks.map(c => c.id));
+            const found = expected.filter(id => wide.chunks.some(c => c.id.startsWith(id)));
+            const ok = expected.length ? found.length === expected.length : used.chunks.length === 0;
+            rows.push(`
+                <h4>${ok ? '✅' : '⚠'} "${escapeHtml(query)}"</h4>
+                <div class="lore_graph_meta">${expected.length ? `Expected near the top: ${expected.map(escapeHtml).join(', ')}` : 'Expected: nothing above the threshold (casual chat)'}</div>
+                <ol>${wide.chunks.map(c => `<li>${escapeHtml(c.id)}${usedIds.has(c.id) ? ' <small>(above threshold, would be used)</small>' : ' <small>(below threshold)</small>'}</li>`).join('')}</ol>`);
+        }
+        const allOk = rows.every(r => r.includes('✅'));
+        callGenericPopup(`<div class="lore_graph_popup"><h3>Meaning search sanity check</h3>
+            <div class="lore_graph_meta">${allOk ? 'All checks look right.' : 'Some results look off. If they seem random, the model file may have a pooling problem: try a different GGUF of the model (for example the official Qwen upload) and rebuild the index. If casual chat matches lore, raise the similarity threshold a little.'}</div>
+            ${rows.join('')}</div>`, POPUP_TYPE.TEXT, '', { wider: true, leftAlign: true, allowVerticalScrolling: true });
+    } catch (error) {
+        console.error('Lore Graph: sanity check failed', error);
+        toastr.error(String(error?.message ?? error), 'Lore Graph');
+    } finally {
+        button.removeClass('disabled');
+    }
+}
+
+function bindEmbeddingSettings() {
+    const settings = getSettings();
+    const changed = () => {
+        saveSettingsDebounced();
+        invalidateRetrievalCache();
+        renderEmbeddingStatus();
+    };
+    $('#lore_graph_embed_enabled').prop('checked', settings.embed_enabled).on('input', function () {
+        settings.embed_enabled = !!$(this).prop('checked');
+        changed();
+    });
+    $('#lore_graph_embed_url').val(settings.embed_url).on('change', function () {
+        settings.embed_url = String($(this).val()).trim().replace(/\/+$/, '');
+        changed();
+    });
+    $('#lore_graph_embed_model').val(settings.embed_model).on('change', function () {
+        settings.embed_model = String($(this).val()).trim();
+        changed();
+    });
+    bindNumber('#lore_graph_embed_top_k', 'embed_top_k', { min: 1, max: 20 });
+    bindNumber('#lore_graph_embed_threshold', 'embed_threshold', { min: 0, max: 1, integer: false });
+    $('#lore_graph_embed_build').on('click', onBuildEmbeddingIndex);
+    $('#lore_graph_embed_check').on('click', onEmbeddingSanityCheck);
+    renderEmbeddingStatus();
 }
 
 // ---------------------------------------------------------------- init

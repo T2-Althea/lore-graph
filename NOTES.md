@@ -162,3 +162,30 @@ Oct 2026). Paths are relative to the SillyTavern root.
 - The test box and "Last injection" show the full report (seeds, ignored, paths,
   chunk scores and statuses, injected text). The last report is kept in memory only;
   per-message history is Milestone 4.
+
+## Meaning search (M3b)
+- Provider: SillyTavern's `vllm` vector source → LM Studio `/v1/embeddings`
+  (`apiUrl` + `model` in the request body). Calls run on the ST server, not the browser.
+  Tested with `text-embedding-qwen3-embedding-4b@q8_0`: 2560-dim, normalized, no pooling
+  problem; 118 chunks + 381 entities embed in ~22 s.
+- Collections `lore_graph_chunks` and `lore_graph_entities`; vectors live in
+  `data/<user>/vectors/vllm/<collection>/<model>/`, so a different model gets its own
+  index automatically. `lore-graph_embeddings.json` maps vector hash → chunk/entity id
+  and records the model. Note: Vectors' "Purge all" would delete these too (rebuild fixes).
+- Query = scanned messages (newest 2000 chars) prefixed with the Qwen instruction; stored
+  documents never get it. `/api/vector/query` returns matches in order but no scores,
+  so a second query at threshold + 0.07 marks "strong" chunk hits; weak ones count half.
+- Seeds: chunk hit = direct chunk score 0.6 × rank factor (1, .85, .7, …), its defined
+  entities seeded at half that; entity hit = 0.6 × rank × 0.5. Meaning seeds never count
+  as the "lore-specific term" that lets everyday words match.
+- Measured similarities: real lore matches 0.49–0.66, casual chat ≤ 0.40 → threshold 0.45.
+  Default top-k is 4 (CLAUDE.md said 3): with 3, "stone reads like someone" missed
+  §3 Ambient Reading (it ranks 4th).
+- Undead → Guild §5 is still not found: by meaning Guild §5 ranks 112 of 118; the link
+  needs reasoning across documents.
+- Definition pull (retrieval step 5b): the top 2 chunks give 35% of their score
+  (× hub factor) to the sections that define specific terms they mention; terms in
+  more than 4 chunks are skipped. After the user added "file a field exception report"
+  to Dungeon §16's guardrail, this pulls in Guild §5 and the undead test passes
+  (meaning search on). Writing lore that names the other document's term is what makes
+  cross-document links possible.

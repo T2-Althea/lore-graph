@@ -7,6 +7,7 @@ import { buildGraph } from './graph.js';
 import { loadGraphStore } from './extraction.js';
 import { loadMatching, matchingRevision } from './matching.js';
 import { buildRetrievalIndex, retrieve } from './retrieval.js';
+import { DEFAULT_EMBEDDING_SETTINGS, buildQueryText, semanticSearch } from './embeddings.js';
 
 /** Prompt key; extension prompts are ordered by key, after Vectors' "3_vectors" / "4_vectors_data_bank". */
 export const PROMPT_KEY = '5_lore_graph';
@@ -20,6 +21,7 @@ export const DEFAULT_INJECTION_SETTINGS = {
     inject_role: 0,     // extension_prompt_roles.SYSTEM
     inject_scan: false, // let World Info scan the injected lore
     inject_template: 'Relevant world lore for this scene, from the setting\'s codices:\n{{text}}',
+    ...DEFAULT_EMBEDDING_SETTINGS,
 };
 
 let cache = { key: '', index: null };
@@ -52,13 +54,28 @@ export function invalidateRetrievalCache() {
  */
 export async function runRetrieval(chunks, messages, settings) {
     const index = await getRetrievalIndex(chunks);
+    const scannedMessages = messages.slice(-(settings.retrieval_messages + 1));
+
+    // Meaning search is optional; if LM Studio is down the reply goes ahead with names only.
+    let meaning = null;
+    let meaningError = null;
+    if (settings.embed_enabled) {
+        try {
+            const queryText = buildQueryText(scannedMessages);
+            if (queryText) meaning = await semanticSearch(queryText, settings);
+        } catch (error) {
+            meaningError = String(error?.message ?? error);
+            console.warn('Lore Graph: meaning search unavailable, using names only', error);
+        }
+    }
+
     const report = await retrieve(index, messages, {
         messages: settings.retrieval_messages,
         hops: settings.retrieval_hops,
         budget: settings.retrieval_budget,
-    }, (text) => getTokenCountAsync(text));
+    }, (text) => getTokenCountAsync(text), meaning);
     const promptText = report.text ? substituteParamsExtended(settings.inject_template || '{{text}}', { text: report.text }) : '';
-    return { ...report, promptText, scannedMessages: messages.slice(-(settings.retrieval_messages + 1)) };
+    return { ...report, promptText, scannedMessages, meaningEnabled: !!settings.embed_enabled, meaningError, meaningHits: meaning };
 }
 
 export function clearInjection(settings) {
