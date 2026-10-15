@@ -4,7 +4,7 @@
 import { ConnectionManagerRequestService } from '../../shared.js';
 import { getTokenCountAsync } from '../../../tokenizers.js';
 import { formatChunk } from './parser.js';
-import { DUPLICATES_SCHEMA, ENTITY_TYPES, EXTRACTION_SCHEMA, RELATION_TYPES, normalizeKey, validateDuplicates, validateExtraction } from './schema.js';
+import { DUPLICATES_SCHEMA, ENTITY_TYPES, EXTRACTION_SCHEMA, RELATION_TYPES, normalizeKey, parseJsonReply, validateDuplicates, validateExtraction } from './schema.js';
 import { buildGraph, formatEntityList, normalizeStore, selectRelevantEntities } from './graph.js';
 import { FILE_PREFIX, loadJsonFile, saveJsonFile } from './storage.js';
 
@@ -209,6 +209,44 @@ async function callWithRateLimitRetry(profileId, messages, options, onWait) {
             });
         }
     }
+}
+
+/**
+ * One-off JSON request (used by review tools): rate-limit waits, time limit, truncation
+ * detection, local check, and one retry with the problem explained.
+ * @param {{ id: string }} profile
+ * @param {{ role: string, content: string }[]} messages
+ * @param {object} schema JSON schema for strict mode
+ * @param {object} settings extension settings
+ * @param {(data: any) => string|null} check returns an error message, or null if the data is usable
+ * @returns {Promise<any>} parsed data
+ */
+export async function callModelForJson(profile, messages, schema, settings, check) {
+    const options = {
+        maxTokens: settings.extraction_max_tokens,
+        useSchema: settings.extraction_structured_output,
+        schema,
+        timeoutSeconds: (Number(settings.extraction_timeout_seconds) || 0) * 2,
+    };
+    let lastError = '';
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        const attemptMessages = attempt === 1 ? messages : [...messages, { role: 'user', content: `Your previous answer could not be used: ${lastError}\nReply again with ONLY the JSON object.` }];
+        try {
+            const { content, truncated } = await callWithRateLimitRetry(profile.id, attemptMessages, options);
+            let data = null;
+            try { data = parseJsonReply(content); } catch (error) { lastError = error.message; }
+            if (data) {
+                const problem = check(data);
+                if (!problem) return data;
+                lastError = problem;
+            }
+            if (truncated) lastError = `${TRUNCATED_MESSAGE} (limit: ${options.maxTokens} tokens)`;
+        } catch (error) {
+            if (error instanceof RateLimitError) throw error;
+            lastError = describeError(error);
+        }
+    }
+    throw new Error(`The AI request failed: ${lastError}`);
 }
 
 function preview(content) {

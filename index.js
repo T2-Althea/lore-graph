@@ -9,6 +9,11 @@ import { SCOPE_IMPORTED, SCOPE_LABELS, getActiveChunks, importFile, listCurrentS
 import { buildGraph, getChunkStatus } from './graph.js';
 import { decideDuplicate, estimateExtractionTokens, findDuplicates, getUsableProfile, loadGraphStore, runExtraction } from './extraction.js';
 import { showDuplicateReview, showGraphBrowser } from './graph-view.js';
+import { DEFAULT_INJECTION_SETTINGS, clearInjection, interceptGeneration, invalidateRetrievalCache, runRetrieval } from './injection.js';
+import { applyEverydayReview, findEverydayWords, loadMatching, setAliasSafe, setEntityMatchMode, setNameMatchModes } from './matching.js';
+import { DEFAULT_RETRIEVAL_SETTINGS, getMatchMode, getNameModes } from './retrieval.js';
+import { matchForm } from './schema.js';
+import { showRetrievalReport } from './report-view.js';
 
 const MODULE_NAME = 'lore_graph';
 const EXTENSION_FOLDER = 'third-party/lore-graph';
@@ -21,6 +26,7 @@ const defaultSettings = {
     extraction_concurrency: 3,
     extraction_timeout_seconds: 180,
     extraction_structured_output: true,
+    ...DEFAULT_INJECTION_SETTINGS,
 };
 
 /** Runtime state (not saved in settings). */
@@ -34,6 +40,8 @@ const state = {
     rescanQueued: false,
     /** @type {AbortController|null} set while extraction runs */
     extraction: null,
+    /** @type {object|null} what was injected before the last reply, and why */
+    lastReport: null,
 };
 
 function getSettings() {
@@ -73,6 +81,7 @@ async function rescan({ quiet = false } = {}) {
                 }
                 const { activeUrls, changed } = await scanSources(state.index);
                 state.activeUrls = activeUrls;
+                invalidateRetrievalCache();
                 if (changed) {
                     await saveIndex(state.index);
                 }
@@ -581,8 +590,14 @@ async function startExtraction(toRun, profile) {
     } finally {
         state.extraction = null;
         setExtractionRunning(false);
+        invalidateRetrievalCache();
         renderGraphSummary();
     }
+}
+
+function openChunkById(chunkId) {
+    const found = findChunk(chunkId);
+    if (found) showChunk(found.chunk, found.entry);
 }
 
 async function onBrowse() {
@@ -594,9 +609,33 @@ async function onBrowse() {
         toastr.info('The graph is empty. Run extraction first.', 'Lore Graph');
         return;
     }
-    showGraphBrowser(graph, (chunkId) => {
-        const found = findChunk(chunkId);
-        if (found) showChunk(found.chunk, found.entry);
+    let matching;
+    try {
+        matching = await loadMatching({ fresh: true });
+    } catch (error) {
+        toastr.error(error.message, 'Lore Graph');
+        return;
+    }
+    showGraphBrowser(graph, openChunkById, {
+        getMode: (entity) => getMatchMode(entity, matching),
+        getNameModes: (entity) => getNameModes(entity, matching),
+        setMode: async (entity, mode) => {
+            await setEntityMatchMode(entity, mode);
+            matching = await loadMatching();
+            invalidateRetrievalCache();
+        },
+        setNameMode: async (name, mode) => {
+            await setNameMatchModes([name], mode);
+            matching = await loadMatching();
+            invalidateRetrievalCache();
+        },
+        isShort: (name) => matchForm(name).replace(/\s/g, '').length < DEFAULT_RETRIEVAL_SETTINGS.minAliasLength,
+        isSafe: (name) => matching.safeAliases.includes(matchForm(name)),
+        setSafe: async (name, safe) => {
+            await setAliasSafe(name, safe);
+            matching = await loadMatching();
+            invalidateRetrievalCache();
+        },
     });
 }
 
@@ -640,10 +679,202 @@ async function onFindDuplicates() {
 }
 
 async function onReviewDuplicates() {
+    if (state.extraction) {
+        // The running extraction saves the graph file and would overwrite these decisions.
+        toastr.info('Review duplicates after the extraction finishes.', 'Lore Graph');
+        return;
+    }
     const store = await loadStoreOrWarn();
     if (!store) return;
     await showDuplicateReview([...store.decisions.pending], decideDuplicate);
+    invalidateRetrievalCache();
     await renderGraphSummary();
+}
+
+// ---------------------------------------------------------------- retrieval
+
+async function onEverydayCheck() {
+    if (state.everydayRunning) {
+        toastr.info('The everyday-word check is already running; progress shows under the button.', 'Lore Graph');
+        return;
+    }
+    const settings = getSettings();
+    let profile;
+    try {
+        profile = getUsableProfile(settings.extraction_profile);
+    } catch (error) {
+        toastr.warning(error.message, 'Lore Graph');
+        return;
+    }
+    const store = await loadStoreOrWarn();
+    if (!store) return;
+    const entities = buildGraph(store, getCurrentChunks().map(c => c.id)).entities;
+    if (!entities.length) {
+        toastr.info('The graph is empty. Run extraction first.', 'Lore Graph');
+        return;
+    }
+    const confirmed = await callGenericPopup(
+        `<div class="lore_graph_popup"><h3>Check for everyday words</h3>
+            <p>Some lore names are also normal words. For example "plate" means a <i>Rank Plate</i> in the lore, but "a plate of stew" has nothing to do with it. Without this check, ordinary chat can pull in lore by accident.</p>
+            <p>The AI will read your entity names (using <b>${escapeHtml(profile.name)}</b>, in a few small requests) and list the ones that are everyday words. <b>This can take a minute or two</b>; progress shows under the button.</p>
+            <p>When it's done, a list appears for you to review. Ticked names are set to <b>Needs context</b>: they only count when a clearly lore-specific word is also in the recent messages. Nothing changes until you click Apply.</p></div>`,
+        POPUP_TYPE.CONFIRM, '', { okButton: 'Start check', cancelButton: 'Cancel', wider: true, leftAlign: true });
+    if (confirmed !== POPUP_RESULT.AFFIRMATIVE) return;
+
+    const button = $('#lore_graph_everyday').addClass('disabled');
+    const statusEl = $('#lore_graph_everyday_status');
+    statusEl.text('Starting the check…');
+    state.everydayRunning = true;
+    try {
+        const { suggestions, checkedForms, failedBatches, error } = await findEverydayWords(entities, profile.id, settings,
+            (done, total) => statusEl.text(`Checking names: ${done} / ${total}…`));
+        if (!checkedForms.length) {
+            statusEl.text('Every name has already been checked. New names are checked after future extractions.');
+            toastr.info('Every name has already been checked.', 'Lore Graph');
+            return;
+        }
+        const failedNote = failedBatches ? ` ${failedBatches} batch(es) failed and will be retried next time (${error}).` : '';
+        statusEl.text(`Found ${suggestions.length} possible everyday word(s) among ${checkedForms.length} names. Review them in the window.${failedNote}`);
+        toastr.info('The everyday-word list is ready to review.', 'Lore Graph');
+        const chosen = await reviewEverydayWords(suggestions);
+        if (chosen === null) {
+            statusEl.text('Review cancelled. Nothing was changed; you can run the check again.');
+            return;
+        }
+        await applyEverydayReview(chosen, checkedForms);
+        invalidateRetrievalCache();
+        statusEl.text(`${chosen.length} name(s) set to "Needs context". Change any entity in Browse graph.${failedNote}`);
+        toastr.success(`${chosen.length} name(s) set to "Needs context".`, 'Lore Graph');
+    } catch (error) {
+        console.error('Lore Graph: everyday-word check failed', error);
+        statusEl.text(String(error?.message ?? error));
+        toastr.error(String(error?.message ?? error), 'Lore Graph');
+    } finally {
+        state.everydayRunning = false;
+        button.removeClass('disabled');
+    }
+}
+
+/**
+ * Lets the user untick suggestions before they're applied.
+ * @returns {Promise<string[]|null>} chosen names, or null if cancelled
+ */
+async function reviewEverydayWords(suggestions) {
+    const root = $(`<div class="lore_graph_popup">
+        <h3>Everyday words</h3>
+        <div class="lore_graph_meta">Ticked names will be set to "Needs context": they only count when a clearly lore-specific word is also in the recent messages. Untick anything that should always count. Only the ticked name changes; the entity's other names keep working. You can change any name later in Browse graph.</div>
+        <div class="lore_graph_everyday_list"></div></div>`);
+    const list = root.find('.lore_graph_everyday_list');
+    if (!suggestions.length) list.append('<small class="lore_graph_empty">No everyday words suggested.</small>');
+    suggestions.forEach((s, i) => list.append(`
+        <label class="checkbox_label"><input type="checkbox" data-index="${i}" checked />
+        <span><b>${escapeHtml(s.name)}</b>${s.name !== s.entity.name ? ` <small>(another name for "${escapeHtml(s.entity.name)}")</small>` : ''} <small>${escapeHtml(s.entity.type)}</small></span></label>`));
+    const result = await callGenericPopup(root, POPUP_TYPE.CONFIRM, '', { okButton: 'Apply', cancelButton: 'Cancel', wider: true, leftAlign: true, allowVerticalScrolling: true });
+    if (result !== POPUP_RESULT.AFFIRMATIVE) return null;
+    return list.find('input:checked').map((_, el) => suggestions[Number($(el).data('index'))].name).get();
+}
+
+async function onTestRetrieval() {
+    const text = String($('#lore_graph_test_input').val() ?? '').trim();
+    if (!text) {
+        toastr.info('Type a sentence to test first.', 'Lore Graph');
+        return;
+    }
+    const chunks = getCurrentChunks();
+    if (!chunks.length) {
+        toastr.info('No chunks loaded. Click Rescan first.', 'Lore Graph');
+        return;
+    }
+    try {
+        // Each line counts as one message, newest last.
+        const messages = text.split(/\n+/).map(x => x.trim()).filter(Boolean);
+        const report = await runRetrieval(chunks, messages, getSettings());
+        showRetrievalReport(report, 'Test retrieval', openChunkById);
+    } catch (error) {
+        console.error('Lore Graph: test retrieval failed', error);
+        toastr.error(String(error?.message ?? error), 'Lore Graph');
+    }
+}
+
+function renderLastInjection() {
+    const report = state.lastReport;
+    const el = $('#lore_graph_last_summary');
+    if (!report) {
+        el.text('No reply generated yet in this session.');
+        return;
+    }
+    const included = report.chunks.filter(c => c.status === 'full' || c.status === 'tldr').length;
+    el.text(included
+        ? `Last reply (${new Date(report.at).toLocaleTimeString()}): ${included} chunk(s), ${report.tokens} tokens, from ${report.seeds.map(s => s.name).join(', ')}.`
+        : `Last reply (${new Date(report.at).toLocaleTimeString()}): nothing injected${report.ignored.length ? ` (ignored: ${report.ignored.map(i => i.via).join(', ')})` : ''}.`);
+}
+
+/** Called by SillyTavern before each generation (see generate_interceptor in manifest.json). */
+globalThis.loreGraph_generateInterceptor = async function (chat, _contextSize, _abort, type) {
+    try {
+        const report = await interceptGeneration(chat, type, getSettings(), getCurrentChunks);
+        if (report) {
+            state.lastReport = report;
+            renderLastInjection();
+            console.debug('Lore Graph: injected', report);
+        }
+    } catch (error) {
+        console.error('Lore Graph: retrieval failed; the reply continues without lore', error);
+        toastr.error('Lore retrieval failed; this reply has no lore. See the browser console (F12).', 'Lore Graph', { preventDuplicates: true });
+    }
+};
+
+function bindNumber(selector, key, { min, max, integer = true }) {
+    const settings = getSettings();
+    $(selector).val(settings[key]).on('input', function () {
+        const value = Number($(this).val());
+        if (Number.isFinite(value) && value >= min && value <= max && (!integer || Number.isInteger(value))) {
+            settings[key] = value;
+            saveSettingsDebounced();
+        }
+    });
+}
+
+function bindRetrievalSettings() {
+    const settings = getSettings();
+    bindNumber('#lore_graph_ret_messages', 'retrieval_messages', { min: 0, max: 50 });
+    bindNumber('#lore_graph_ret_hops', 'retrieval_hops', { min: 0, max: 4 });
+    bindNumber('#lore_graph_ret_budget', 'retrieval_budget', { min: 100, max: 20000 });
+    bindNumber('#lore_graph_depth', 'inject_depth', { min: 0, max: 9999 });
+
+    // Changing where the lore goes clears the old placement so it can't linger in both places.
+    const changePlacement = (apply) => {
+        clearInjection(settings);
+        apply();
+        saveSettingsDebounced();
+    };
+    $(`input[name="lore_graph_position"][value="${settings.inject_position}"]`).prop('checked', true);
+    $('input[name="lore_graph_position"]').on('change', function () {
+        changePlacement(() => { settings.inject_position = Number($(this).val()); });
+    });
+    $('#lore_graph_depth').on('change', () => changePlacement(() => { }));
+    $('#lore_graph_role').val(settings.inject_role).on('change', function () {
+        changePlacement(() => { settings.inject_role = Number($(this).val()); });
+    });
+    $('#lore_graph_template').val(settings.inject_template).on('input', function () {
+        settings.inject_template = String($(this).val());
+        saveSettingsDebounced();
+    });
+    $('#lore_graph_scan').prop('checked', settings.inject_scan).on('input', function () {
+        settings.inject_scan = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    $('#lore_graph_test').on('click', onTestRetrieval);
+    $('#lore_graph_last').on('click', () => {
+        if (!state.lastReport) {
+            toastr.info('No reply has been generated with Lore Graph enabled yet in this session.', 'Lore Graph');
+            return;
+        }
+        showRetrievalReport(state.lastReport, 'Last injection', openChunkById);
+    });
+    $('#lore_graph_everyday').on('click', onEverydayCheck);
+    renderLastInjection();
 }
 
 // ---------------------------------------------------------------- init
@@ -659,6 +890,8 @@ export async function init() {
         saveSettingsDebounced();
         if (settings.enabled) {
             rescan({ quiet: true });
+        } else {
+            clearInjection(settings);
         }
     });
 
@@ -712,6 +945,7 @@ export async function init() {
     $('#lore_graph_browse').on('click', onBrowse);
     $('#lore_graph_dupes_find').on('click', onFindDuplicates);
     $('#lore_graph_dupes_review').on('click', onReviewDuplicates);
+    bindRetrievalSettings();
 
     eventSource.on(event_types.CHAT_CHANGED, () => {
         if (getSettings().enabled) {

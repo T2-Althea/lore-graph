@@ -142,3 +142,23 @@ Oct 2026). Paths are relative to the SillyTavern root.
 - The graph file is re-read (`loadGraphStore({ fresh: true })`) before any change, so a
   second tab with an older copy can't overwrite newer results; an unreadable file stops
   the operation instead of starting from an empty graph.
+
+## Retrieval and injection (M3)
+- `manifest.json` → `generate_interceptor: "loreGraph_generateInterceptor"`; it calls
+  `injection.js interceptGeneration`, which clears the prompt key `5_lore_graph`, runs
+  retrieval, and sets it again with `setExtensionPrompt` (position/depth/role/scan from
+  settings). Skips `type === 'quiet'` like Vectors. Never throws (a toast instead).
+- `retrieval.js` (pure, Node-testable): match names/aliases with `matchForm` (whole
+  words, every word singular, aliases < 4 letters ignored unless marked safe) → seeds
+  weighted by recency (0.8 per older message) → expand `hops` steps (×0.5 per step ×
+  edge-type weight × hub factor 1/log2(chunk count)) → chunk score = Σ entity score ×
+  (1 if defined there, 0.4 if only mentioned) × hub → ×1.25 if directly matched →
+  shared-distinctive-word boost (IDF-weighted, reorders only) → fill budget, TL;DR-only
+  when tight, guardrail always kept, section TL;DR written once.
+- Everyday words: per-entity mode Always / Needs context / Never in
+  `lore-graph_matching.json` (separate from the graph file so it can't race with
+  extraction). "Needs context" names count only if an "Always" name also matched.
+  Optional one-call "Check for everyday words" suggests them; the user reviews.
+- The test box and "Last injection" show the full report (seeds, ignored, paths,
+  chunk scores and statuses, injected text). The last report is kept in memory only;
+  per-message history is Milestone 4.

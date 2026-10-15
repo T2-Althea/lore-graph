@@ -85,7 +85,61 @@
                     <span>Review suggestions</span>
                 </div>
             </div>
+            <div class="flex-container">
+                <div id="lore_graph_everyday" class="menu_button menu_button_icon" title="One AI call that suggests which names are ordinary words (like 'plate' or 'smell'), so they only count next to a real lore term">
+                    <i class="fa-solid fa-spell-check"></i>
+                    <span>Check for everyday words</span>
+                </div>
+            </div>
+            <div id="lore_graph_everyday_status" class="lore_graph_status"></div>
             <div id="lore_graph_failed" class="lore_graph_failed"></div>
+
+            <hr />
+            <h4>Retrieval &amp; injection</h4>
+            <small class="lore_graph_hint">Before each AI reply, recent messages are scanned for lore names, related lore is found through the graph, and the best chunks are added to the prompt. No AI calls are made for this.</small>
+            <div class="lore_graph_grid">
+                <label for="lore_graph_ret_messages">Earlier messages to scan</label>
+                <input id="lore_graph_ret_messages" class="text_pole" type="number" min="0" max="50" step="1" />
+                <label for="lore_graph_ret_hops">Relationship steps</label>
+                <input id="lore_graph_ret_hops" class="text_pole" type="number" min="0" max="4" step="1" />
+                <label for="lore_graph_ret_budget">Token budget</label>
+                <input id="lore_graph_ret_budget" class="text_pole" type="number" min="100" max="20000" step="50" />
+            </div>
+            <label>Injection position</label>
+            <div class="radio_group">
+                <label><input type="radio" name="lore_graph_position" value="2" /> <span>Before Main Prompt / Story String</span></label>
+                <label><input type="radio" name="lore_graph_position" value="0" /> <span>After Main Prompt / Story String</span></label>
+                <label>
+                    <input type="radio" name="lore_graph_position" value="1" /> <span>In-chat @ Depth</span>
+                    <input id="lore_graph_depth" class="text_pole widthUnset" type="number" min="0" max="9999" />
+                    <span>as</span>
+                    <select id="lore_graph_role" class="text_pole widthNatural">
+                        <option value="0">System</option>
+                        <option value="1">User</option>
+                        <option value="2">Assistant</option>
+                    </select>
+                </label>
+            </div>
+            <label for="lore_graph_template">Injection template (<code>{{text}}</code> is replaced by the lore)</label>
+            <textarea id="lore_graph_template" class="text_pole textarea_compact" rows="2"></textarea>
+            <label class="checkbox_label" for="lore_graph_scan">
+                <input id="lore_graph_scan" type="checkbox" />
+                <span>Let World Info scan the injected lore</span>
+            </label>
+
+            <label for="lore_graph_test_input">Test retrieval (nothing is sent to the AI)</label>
+            <textarea id="lore_graph_test_input" class="text_pole textarea_compact" rows="2" placeholder="e.g. I slid my plate across to the checkpoint clerk."></textarea>
+            <div class="flex-container">
+                <div id="lore_graph_test" class="menu_button menu_button_icon">
+                    <i class="fa-solid fa-flask"></i>
+                    <span>Test</span>
+                </div>
+                <div id="lore_graph_last" class="menu_button menu_button_icon" title="What was injected before the last AI reply, and why">
+                    <i class="fa-solid fa-magnifying-glass-chart"></i>
+                    <span>Last injection</span>
+                </div>
+            </div>
+            <div id="lore_graph_last_summary" class="lore_graph_status"></div>
         </div>
     </div>
 </div>

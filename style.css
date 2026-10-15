@@ -238,3 +238,60 @@
     padding-left: 10px;
     border-left: 1px solid var(--SmartThemeBorderColor);
 }
+
+#lore_graph_settings .lore_graph_grid {
+    display: grid;
+    grid-template-columns: 1fr 90px;
+    gap: 4px 8px;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+#lore_graph_settings .radio_group label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-wrap: wrap;
+}
+
+.lore_graph_table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9em;
+}
+
+.lore_graph_table td,
+.lore_graph_table th {
+    padding: 3px 6px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor);
+    vertical-align: top;
+    text-align: left;
+}
+
+.lore_graph_chunkstatus_full { border-color: var(--okColor, #4caf50); }
+.lore_graph_chunkstatus_tldr { border-color: var(--warning, #e5a50a); }
+.lore_graph_chunkstatus_cut,
+.lore_graph_chunkstatus_below_threshold { opacity: 0.7; }
+
+.lore_graph_match_mode {
+    width: auto;
+    display: inline-block;
+}
+
+.lore_graph_everyday_list label {
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+}
+
+.lore_graph_name_mode {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.9em;
+}
+
+.lore_graph_name_mode select {
+    width: auto;
+}

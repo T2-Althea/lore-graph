@@ -1,16 +1,28 @@
-// Graph browser popup: entities, relations, placeholders. Read-only view.
+// Graph browser popup: entities, relations, placeholders. The graph itself is read-only
+// here; the only thing that can be changed is how each entity is allowed to match chat text.
 
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 import { escapeHtml } from '../../../utils.js';
 import { ENTITY_TYPES } from './schema.js';
+import { MATCH_MODES } from './retrieval.js';
 
 const MAX_ROWS = 400;
 
 /**
+ * @typedef {object} MatchingControls
+ * @property {(entity: object) => string} getMode
+ * @property {(entity: object, mode: string) => Promise<void>} setMode
+ * @property {(name: string) => boolean} isShort name is below the minimum match length
+ * @property {(name: string) => boolean} isSafe
+ * @property {(name: string, safe: boolean) => Promise<void>} setSafe
+ */
+
+/**
  * @param {{ entities: import('./graph.js').Entity[], edges: import('./graph.js').Edge[] }} graph
  * @param {(chunkId: string) => void} onOpenChunk
+ * @param {MatchingControls} [matching]
  */
-export function showGraphBrowser(graph, onOpenChunk) {
+export function showGraphBrowser(graph, onOpenChunk, matching) {
     const byId = new Map(graph.entities.map(e => [e.id, e]));
     const outgoing = new Map();
     const incoming = new Map();
@@ -95,6 +107,7 @@ export function showGraphBrowser(graph, onOpenChunk) {
                     <span class="${entity.placeholder ? 'lore_graph_placeholder' : ''}">${escapeHtml(entity.name)}</span>
                     <span class="lore_graph_badge">${escapeHtml(entity.type)}</span>
                     ${entity.placeholder ? '<span class="lore_graph_badge lore_graph_placeholder">placeholder</span>' : ''}
+                    ${matching && matching.getMode(entity) !== 'always' ? `<span class="lore_graph_badge" title="How this entity's names match chat text">${escapeHtml(MATCH_MODES[matching.getMode(entity)] ?? 'Mixed matching')}</span>` : ''}
                     <small>${degree} links · ${entity.sourceChunks.length} chunks</small>
                 </div>`);
         }
@@ -102,9 +115,38 @@ export function showGraphBrowser(graph, onOpenChunk) {
         if (!rows.length) list.append('<small class="lore_graph_empty">No entities match.</small>');
     }
 
+    let currentId = null;
+
+    const modeOptions = (selected) => Object.entries(MATCH_MODES)
+        .map(([value, label]) => `<option value="${value}" ${value === selected ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('');
+
+    function renderMatchingControls(entity) {
+        const mode = matching.getMode(entity);
+        const names = matching.getNameModes(entity);
+        return `
+            <div class="lore_graph_matching">
+                <label>Matching in chat (all names):
+                    <select class="text_pole lore_graph_match_mode">
+                        ${mode === 'mixed' ? '<option value="" selected disabled>Mixed (see below)</option>' : ''}
+                        ${modeOptions(mode)}
+                    </select>
+                </label>
+                <div class="lore_graph_row_sub">Always: any mention counts. Needs context: counts only when a clearly lore-specific term is also in the recent messages (for everyday words). Never: ignored; the entity can still be reached through relationships.</div>
+                ${names.length > 1 ? `<details ${mode === 'mixed' ? 'open' : ''}><summary class="lore_graph_row_sub">Per name</summary>
+                    ${names.map(({ name, mode: nameMode }) => `
+                        <div class="lore_graph_name_mode">
+                            <span>${escapeHtml(name)}</span>
+                            <select class="text_pole lore_graph_name_mode_select" data-name="${escapeHtml(name)}">${modeOptions(nameMode)}</select>
+                        </div>`).join('')}
+                </details>` : ''}
+                ${names.some(({ name }) => matching.isShort(name)) ? `<div class="lore_graph_row_sub">Names under 4 letters are ignored unless marked safe: ${names.filter(({ name }) => matching.isShort(name)).map(({ name }) => `<label class="checkbox_label"><input type="checkbox" class="lore_graph_safe_alias" data-name="${escapeHtml(name)}" ${matching.isSafe(name) ? 'checked' : ''}/> ${escapeHtml(name)}</label>`).join(' ')}</div>` : ''}
+            </div>`;
+    }
+
     function renderDetail(id) {
         const entity = byId.get(id);
         if (!entity) return;
+        currentId = id;
         const edgeRow = (edge, otherId, direction) => `
             <li>${direction === 'out' ? '→' : '←'} <span class="lore_graph_badge">${escapeHtml(edge.type)}</span> ${entityLink(otherId)}
                 ${edge.weight > 1 ? `<small>×${edge.weight}</small>` : ''}
@@ -119,6 +161,7 @@ export function showGraphBrowser(graph, onOpenChunk) {
             ${entity.aliases.length ? `<div class="lore_graph_meta">Also called: ${entity.aliases.map(escapeHtml).join(', ')}</div>` : ''}
             <div class="lore_graph_meta">Defined in: ${entity.definedIn.length ? chunkLinks(entity.definedIn) : '—'}</div>
             <div class="lore_graph_meta">Mentioned in: ${chunkLinks(entity.sourceChunks)}</div>
+            ${matching ? renderMatchingControls(entity) : ''}
             <h4>Relations (${out.length + inc.length})</h4>
             <ul class="lore_graph_relations">
                 ${out.map(e => edgeRow(e, e.target, 'out')).join('')}
@@ -136,6 +179,33 @@ export function showGraphBrowser(graph, onOpenChunk) {
     root.on('click', '.lore_graph_entity_row', function () { renderDetail(String($(this).data('id'))); });
     root.on('click', '.lore_graph_entity_link', function (e) { e.stopPropagation(); renderDetail(String($(this).data('id'))); });
     root.on('click', '.lore_graph_chunk_link', function (e) { e.stopPropagation(); onOpenChunk(String($(this).data('chunk'))); });
+    root.on('change', '.lore_graph_match_mode', async function () {
+        const entity = byId.get(currentId);
+        if (!entity) return;
+        try {
+            await matching.setMode(entity, String($(this).val()));
+            renderList();
+            renderDetail(currentId);
+        } catch (error) {
+            toastr.error(String(error?.message ?? error), 'Lore Graph');
+        }
+    });
+    root.on('change', '.lore_graph_name_mode_select', async function () {
+        try {
+            await matching.setNameMode(String($(this).data('name')), String($(this).val()));
+            renderList();
+            renderDetail(currentId);
+        } catch (error) {
+            toastr.error(String(error?.message ?? error), 'Lore Graph');
+        }
+    });
+    root.on('change', '.lore_graph_safe_alias', async function () {
+        try {
+            await matching.setSafe(String($(this).data('name')), $(this).prop('checked'));
+        } catch (error) {
+            toastr.error(String(error?.message ?? error), 'Lore Graph');
+        }
+    });
 
     renderList();
     callGenericPopup(root, POPUP_TYPE.TEXT, '', { large: true, allowVerticalScrolling: true, leftAlign: true, okButton: 'Close' });
