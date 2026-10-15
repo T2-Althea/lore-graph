@@ -1,9 +1,14 @@
 import { eventSource, event_types, saveSettingsDebounced } from '../../../../script.js';
 import { extension_settings, renderExtensionTemplateAsync } from '../../../extensions.js';
-import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
+import { callGenericPopup, POPUP_RESULT, POPUP_TYPE } from '../../../popup.js';
 import { debounce, escapeHtml } from '../../../utils.js';
+import { getTokenCountAsync } from '../../../tokenizers.js';
+import { ConnectionManagerRequestService } from '../../shared.js';
 import { formatChunk } from './parser.js';
 import { SCOPE_IMPORTED, SCOPE_LABELS, getActiveChunks, importFile, listCurrentSources, loadIndex, removeImport, saveIndex, scanSources } from './sources.js';
+import { buildGraph, getChunkStatus } from './graph.js';
+import { decideDuplicate, estimateExtractionTokens, findDuplicates, getUsableProfile, loadGraphStore, runExtraction } from './extraction.js';
+import { showDuplicateReview, showGraphBrowser } from './graph-view.js';
 
 const MODULE_NAME = 'lore_graph';
 const EXTENSION_FOLDER = 'third-party/lore-graph';
@@ -11,6 +16,11 @@ const EXTENSION_FOLDER = 'third-party/lore-graph';
 // Configuration only. The graph and chunk index are stored as JSON files, never here.
 const defaultSettings = {
     enabled: false,
+    extraction_profile: '',
+    extraction_max_tokens: 16000,
+    extraction_concurrency: 3,
+    extraction_timeout_seconds: 180,
+    extraction_structured_output: true,
 };
 
 /** Runtime state (not saved in settings). */
@@ -22,6 +32,8 @@ const state = {
     /** @type {Promise<void>|null} */
     scanning: null,
     rescanQueued: false,
+    /** @type {AbortController|null} set while extraction runs */
+    extraction: null,
 };
 
 function getSettings() {
@@ -197,12 +209,101 @@ function renderChunks() {
 function render() {
     renderSources();
     renderChunks();
+    renderGraphSummary();
+}
+
+/** Chunks usable in the current chat, in document order. */
+function getCurrentChunks() {
+    return state.index ? getActiveChunks(state.index, state.activeUrls) : [];
+}
+
+function findChunk(chunkId) {
+    for (const url of state.activeUrls) {
+        const entry = state.index?.docs[url];
+        const chunk = entry?.chunks.find(c => c.id === chunkId);
+        if (chunk) return { chunk, entry };
+    }
+    for (const entry of Object.values(state.index?.docs ?? {})) {
+        const chunk = entry.chunks.find(c => c.id === chunkId);
+        if (chunk) return { chunk, entry };
+    }
+    return null;
+}
+
+async function renderGraphSummary() {
+    const chunks = getCurrentChunks();
+    let store;
+    try {
+        store = await loadGraphStore({ fresh: true });
+    } catch (error) {
+        $('#lore_graph_summary').text(error.message);
+        return;
+    }
+    const status = getChunkStatus(store, chunks);
+    const graph = buildGraph(store, chunks.map(c => c.id));
+    const placeholders = graph.entities.filter(e => e.placeholder).length;
+
+    const toDo = status.missing.length + status.changed.length;
+    $('#lore_graph_summary').html(`
+        ${graph.entities.length} entities (${placeholders} placeholders) · ${graph.edges.length} relations<br>
+        Chunks: ${status.done.length} extracted · ${toDo} new or changed · ${status.failed.length} failed`);
+
+    const pending = store.decisions.pending.length;
+    $('#lore_graph_dupes_review').toggle(pending > 0).find('span').text(`Review suggestions (${pending})`);
+
+    const failedBox = $('#lore_graph_failed').empty();
+    if (status.failed.length) {
+        failedBox.append(`<small class="lore_graph_hint">Failed chunks are retried by "Extract new &amp; changed".</small>`);
+        for (const id of status.failed) {
+            const result = store.chunkResults[id];
+            const row = $(`
+                <div class="lore_graph_row">
+                    <i class="fa-solid fa-circle-xmark lore_graph_status_error"></i>
+                    <span class="lore_graph_link">${escapeHtml(id)}</span>
+                    <div class="lore_graph_row_sub">${escapeHtml(result.error ?? 'Unknown error')}</div>
+                </div>`);
+            row.find('.lore_graph_link').on('click', () => showFailure(id, result));
+            failedBox.append(row);
+        }
+    }
+}
+
+/** Loads the latest graph file, or shows why it can't and returns null. */
+async function loadStoreOrWarn() {
+    try {
+        return await loadGraphStore({ fresh: true });
+    } catch (error) {
+        toastr.error(error.message, 'Lore Graph');
+        return null;
+    }
+}
+
+function setExtractionRunning(running) {
+    $('#lore_graph_stop').toggle(running);
+    $('#lore_graph_progress').toggle(running);
+    $('#lore_graph_extract, #lore_graph_extract_all, #lore_graph_dupes_find').toggleClass('disabled', running);
 }
 
 // ---------------------------------------------------------------- popups
 
-function showChunk(chunk, entry) {
-    const html = `
+async function showChunk(chunk, entry) {
+    let result = null;
+    try {
+        result = (await loadGraphStore()).chunkResults[chunk.id] ?? null;
+    } catch { /* the summary area already reports unreadable graph files */ }
+
+    let extractionHtml = '<div class="lore_graph_meta">Not extracted yet.</div>';
+    if (result?.status === 'failed') {
+        extractionHtml = `<div class="lore_graph_status_error">Failed: ${escapeHtml(result.error ?? '')}</div>`;
+    } else if (result) {
+        const stale = result.hash !== chunk.hash ? ' <span class="lore_graph_status_warning">(text changed since)</span>' : '';
+        extractionHtml = `
+            <div class="lore_graph_meta">${escapeHtml(result.model ?? '')} · ${new Date(result.extractedAt).toLocaleString()}${stale}</div>
+            <div class="lore_graph_popup_block"><b>Entities:</b> ${result.entities.map(e => escapeHtml(e.name) + (e.defined_here ? '' : '<small> (mention)</small>')).join(', ') || '(none)'}</div>
+            <div class="lore_graph_popup_block"><b>Relations:</b><br>${result.relations.map(r => `${escapeHtml(r.source)} <span class="lore_graph_badge">${escapeHtml(r.type)}</span> ${escapeHtml(r.target)}`).join('<br>') || '(none)'}</div>`;
+    }
+
+    const root = $(`
         <div class="lore_graph_popup">
             <h3>${escapeHtml(chunk.id)}</h3>
             <div class="lore_graph_meta">
@@ -215,8 +316,31 @@ function showChunk(chunk, entry) {
             ${chunk.guardrail ? `<h4>✕ Not This (guardrail)</h4><div class="lore_graph_popup_block lore_graph_guardrail">${escapeHtml(chunk.guardrail)}</div>` : ''}
             <h4>As it will appear in the prompt</h4>
             <div class="lore_graph_popup_block lore_graph_meta">${escapeHtml(formatChunk(chunk))}</div>
-        </div>`;
-    callGenericPopup(html, POPUP_TYPE.TEXT, '', { wider: true, leftAlign: true, allowVerticalScrolling: true });
+            <h4>What the graph got from this chunk</h4>
+            ${extractionHtml}
+            <div class="menu_button menu_button_icon lore_graph_reextract_one" title="Ask the AI again for this chunk only (one request) and replace its result">
+                <i class="fa-solid fa-arrows-rotate"></i><span>Re-extract this chunk</span>
+            </div>
+        </div>`);
+
+    const popupPromise = callGenericPopup(root, POPUP_TYPE.TEXT, '', { wider: true, leftAlign: true, allowVerticalScrolling: true });
+    root.find('.lore_graph_reextract_one').on('click', async function () {
+        if (state.extraction) {
+            toastr.info('An extraction is already running. Wait for it to finish or click Stop.', 'Lore Graph');
+            return;
+        }
+        let profile;
+        try {
+            profile = getUsableProfile(getSettings().extraction_profile);
+        } catch (error) {
+            toastr.warning(error.message, 'Lore Graph');
+            return;
+        }
+        $(this).addClass('disabled').find('span').text('Re-extracting… (you can close this window)');
+        await startExtraction([chunk], profile);
+        $(this).removeClass('disabled').find('span').text('Done. Reopen the chunk to see the new result.');
+    });
+    return popupPromise;
 }
 
 function showWarnings(entry) {
@@ -280,7 +404,13 @@ async function onRemoveImport(entry) {
     if (!confirmed) {
         return;
     }
-    await removeImport(entry.url, state.index);
+    try {
+        await removeImport(entry.url, state.index);
+    } catch (error) {
+        console.error('Lore Graph: remove failed', error);
+        toastr.error(String(error?.message ?? error), 'Lore Graph');
+        return;
+    }
     await saveIndex(state.index);
     await rescan({ quiet: true });
 }
@@ -297,6 +427,223 @@ async function onFileDeleted(url) {
         await saveIndex(state.index);
         await rescan({ quiet: true });
     }
+}
+
+// ---------------------------------------------------------------- extraction
+
+function showFailure(chunkId, result) {
+    const html = `
+        <div class="lore_graph_popup">
+            <h3>Extraction failed: ${escapeHtml(chunkId)}</h3>
+            <div class="lore_graph_meta">${escapeHtml(result.profileName ?? '')} · ${escapeHtml(result.model ?? '')} · ${new Date(result.extractedAt).toLocaleString()}</div>
+            <h4>Reason</h4>
+            <div class="lore_graph_popup_block">${escapeHtml(result.error ?? 'Unknown error')}</div>
+            ${result.rawPreview ? `<h4>Start of the model's reply</h4><div class="lore_graph_popup_block lore_graph_meta">${escapeHtml(result.rawPreview)}</div>` : ''}
+        </div>`;
+    callGenericPopup(html, POPUP_TYPE.TEXT, '', { wider: true, leftAlign: true, allowVerticalScrolling: true });
+}
+
+/**
+ * Shows what would be sent and lets the user pick documents. Returns the chunks to run, or null.
+ * @param {import('./parser.js').LoreChunk[]} candidates
+ * @param {import('./graph.js').Entity[]} entities current known entities
+ * @param {object} profile
+ * @param {string} title
+ */
+async function confirmExtraction(candidates, entities, profile, title) {
+    const docIds = [...new Set(candidates.map(c => c.docId))];
+    const root = $(`
+        <div class="lore_graph_popup">
+            <h3>${escapeHtml(title)}</h3>
+            <div class="lore_graph_meta">Profile: <b>${escapeHtml(profile.name)}</b> · Model: <b>${escapeHtml(profile.model)}</b></div>
+            <p>Documents to include (tip: run one document first to check quality):</p>
+            <div class="lore_graph_doc_choices"></div>
+            <p class="lore_graph_estimate"></p>
+            <small class="lore_graph_hint">One AI call per chunk, run one after another. Progress is saved after every chunk, and you can stop at any time.</small>
+        </div>`);
+    const choices = root.find('.lore_graph_doc_choices');
+    for (const docId of docIds) {
+        const docChunks = candidates.filter(c => c.docId === docId);
+        choices.append(`
+            <label class="checkbox_label">
+                <input type="checkbox" value="${escapeHtml(docId)}" checked />
+                <span>${escapeHtml(docId)} — ${escapeHtml(docChunks[0].docTitle)} (${docChunks.length} chunks)</span>
+            </label>`);
+    }
+
+    const selected = () => {
+        const ids = new Set(choices.find('input:checked').map((_, el) => String($(el).val())).get());
+        return candidates.filter(c => ids.has(c.docId));
+    };
+    const updateEstimate = async () => {
+        const chunks = selected();
+        const tokens = await estimateExtractionTokens(chunks, entities);
+        root.find('.lore_graph_estimate').html(`<b>${chunks.length}</b> chunks · about <b>${tokens.toLocaleString()}</b> input tokens, plus the model's replies.`);
+    };
+    choices.on('change', 'input', updateEstimate);
+    await updateEstimate();
+
+    const result = await callGenericPopup(root, POPUP_TYPE.CONFIRM, '', { okButton: 'Start extraction', cancelButton: 'Cancel', wider: true, leftAlign: true });
+    if (result !== POPUP_RESULT.AFFIRMATIVE) return null;
+    const chunks = selected();
+    return chunks.length ? chunks : null;
+}
+
+/** @param {'changed'|'all'} mode */
+async function onExtract(mode) {
+    if (state.extraction) return;
+    const settings = getSettings();
+
+    let profile;
+    try {
+        profile = getUsableProfile(settings.extraction_profile);
+    } catch (error) {
+        toastr.warning(error.message, 'Lore Graph');
+        return;
+    }
+
+    if (state.scanning) await state.scanning;
+    const chunks = getCurrentChunks();
+    if (!chunks.length) {
+        toastr.info('No chunks loaded. Add lore files and click Rescan first.', 'Lore Graph');
+        return;
+    }
+
+    const store = await loadStoreOrWarn();
+    if (!store) return;
+    const status = getChunkStatus(store, chunks);
+    const wanted = mode === 'all' ? new Set(chunks.map(c => c.id)) : new Set([...status.missing, ...status.changed, ...status.failed]);
+    const candidates = chunks.filter(c => wanted.has(c.id));
+    if (!candidates.length) {
+        toastr.info('Every chunk is already extracted and unchanged.', 'Lore Graph');
+        return;
+    }
+
+    const known = buildGraph(store, chunks.map(c => c.id)).entities;
+    const toRun = await confirmExtraction(candidates, known, profile, mode === 'all' ? 'Re-extract everything' : 'Extract new & changed chunks');
+    if (!toRun) return;
+
+    await startExtraction(toRun, profile);
+}
+
+/**
+ * Runs extraction with progress shown in the panel. Shared by the extract buttons and
+ * the single-chunk "Re-extract this chunk" button.
+ * @param {import('./parser.js').LoreChunk[]} toRun
+ * @param {{ id: string }} profile
+ */
+async function startExtraction(toRun, profile) {
+    const settings = getSettings();
+    const chunks = getCurrentChunks();
+    const controller = new AbortController();
+    state.extraction = controller;
+    setExtractionRunning(true);
+    const statusEl = $('#lore_graph_extract_status');
+    const progressEl = $('#lore_graph_progress');
+    let lastSummaryDone = 0;
+
+    try {
+        const outcome = await runExtraction({
+            chunks: toRun,
+            contextChunkIds: chunks.map(c => c.id),
+            profileId: profile.id,
+            settings,
+            signal: controller.signal,
+            onProgress: ({ done, total, running, failed, waiting }) => {
+                progressEl.attr('max', total).val(done);
+                const failedText = failed ? ` · ${failed} failed` : '';
+                if (waiting) {
+                    statusEl.text(`Provider is refusing requests (rate/usage limit). Waiting ${waiting}s before trying again… (${done}/${total} done${failedText})`);
+                } else if (running.length) {
+                    statusEl.text(`${done}/${total} done${failedText} · working on: ${running.join(' · ')}`);
+                }
+                if (done > lastSummaryDone) {
+                    lastSummaryDone = done;
+                    renderGraphSummary();
+                }
+            },
+        });
+
+        const summary = `${outcome.done} chunk(s) processed, ${outcome.failed} failed.`;
+        if (outcome.stopReason) {
+            statusEl.text(`Paused. ${summary} ${outcome.stopReason}`);
+            toastr.warning(outcome.stopReason, 'Lore Graph: extraction paused', { timeOut: 15000 });
+        } else if (outcome.stopped) {
+            statusEl.text(`Stopped. ${summary} Click "Extract new & changed" to continue.`);
+        } else {
+            statusEl.text(`Finished. ${summary}`);
+            toastr.success(summary, 'Lore Graph: extraction finished');
+        }
+    } catch (error) {
+        console.error('Lore Graph: extraction error', error);
+        statusEl.text(`Extraction stopped by an error: ${error?.message ?? error}`);
+        toastr.error(String(error?.message ?? error), 'Lore Graph: extraction error');
+    } finally {
+        state.extraction = null;
+        setExtractionRunning(false);
+        renderGraphSummary();
+    }
+}
+
+async function onBrowse() {
+    const chunks = getCurrentChunks();
+    const store = await loadStoreOrWarn();
+    if (!store) return;
+    const graph = buildGraph(store, chunks.map(c => c.id));
+    if (!graph.entities.length) {
+        toastr.info('The graph is empty. Run extraction first.', 'Lore Graph');
+        return;
+    }
+    showGraphBrowser(graph, (chunkId) => {
+        const found = findChunk(chunkId);
+        if (found) showChunk(found.chunk, found.entry);
+    });
+}
+
+async function onFindDuplicates() {
+    if (state.extraction) return;
+    const settings = getSettings();
+    let profile;
+    try {
+        profile = getUsableProfile(settings.extraction_profile);
+    } catch (error) {
+        toastr.warning(error.message, 'Lore Graph');
+        return;
+    }
+    const store = await loadStoreOrWarn();
+    if (!store) return;
+    const entities = buildGraph(store, getCurrentChunks().map(c => c.id)).entities;
+    if (entities.length < 2) {
+        toastr.info('The graph needs entities first. Run extraction.', 'Lore Graph');
+        return;
+    }
+    const listTokens = await getTokenCountAsync(entities.map(e => `${e.name} ${e.type} ${e.aliases.join(' ')} ${e.description}`).join('\n'));
+    const confirmed = await callGenericPopup(
+        `<div class="lore_graph_popup"><h3>Find possible duplicates</h3><p>This makes <b>one</b> AI call with ${entities.length} entities (about ${listTokens.toLocaleString()} input tokens) using <b>${escapeHtml(profile.name)}</b>. You'll review each suggestion before anything is merged.</p></div>`,
+        POPUP_TYPE.CONFIRM, '', { okButton: 'Run', cancelButton: 'Cancel' });
+    if (confirmed !== POPUP_RESULT.AFFIRMATIVE) return;
+
+    const button = $('#lore_graph_dupes_find').addClass('disabled');
+    $('#lore_graph_extract_status').text('Asking the AI for possible duplicates…');
+    try {
+        const added = await findDuplicates(entities, profile.id, settings);
+        $('#lore_graph_extract_status').text(added ? `${added} new suggestion(s) to review.` : 'No new duplicates suggested.');
+        await renderGraphSummary();
+        if (added) await onReviewDuplicates();
+    } catch (error) {
+        console.error('Lore Graph: duplicate finder failed', error);
+        $('#lore_graph_extract_status').text(String(error?.message ?? error));
+        toastr.error(String(error?.message ?? error), 'Lore Graph');
+    } finally {
+        button.removeClass('disabled');
+    }
+}
+
+async function onReviewDuplicates() {
+    const store = await loadStoreOrWarn();
+    if (!store) return;
+    await showDuplicateReview([...store.decisions.pending], decideDuplicate);
+    await renderGraphSummary();
 }
 
 // ---------------------------------------------------------------- init
@@ -324,6 +671,47 @@ export async function init() {
             await onImportFiles(files);
         }
     });
+
+    try {
+        ConnectionManagerRequestService.handleDropdown('#lore_graph_profile', settings.extraction_profile, (profile) => {
+            settings.extraction_profile = profile?.id ?? '';
+            saveSettingsDebounced();
+        });
+    } catch (error) {
+        console.warn('Lore Graph: Connection Manager unavailable', error);
+        $('#lore_graph_profile').replaceWith('<small class="lore_graph_status_error">The Connection Manager extension is disabled. Enable it to run extraction.</small>');
+    }
+    $('#lore_graph_max_tokens').val(settings.extraction_max_tokens).on('input', function () {
+        const value = Number($(this).val());
+        if (Number.isFinite(value) && value >= 500) {
+            settings.extraction_max_tokens = Math.round(value);
+            saveSettingsDebounced();
+        }
+    });
+    $('#lore_graph_concurrency').val(settings.extraction_concurrency).on('input', function () {
+        const value = Number($(this).val());
+        if (Number.isInteger(value) && value >= 1 && value <= 8) {
+            settings.extraction_concurrency = value;
+            saveSettingsDebounced();
+        }
+    });
+    $('#lore_graph_timeout').val(settings.extraction_timeout_seconds).on('input', function () {
+        const value = Number($(this).val());
+        if (Number.isFinite(value) && value >= 0) {
+            settings.extraction_timeout_seconds = Math.round(value);
+            saveSettingsDebounced();
+        }
+    });
+    $('#lore_graph_structured').prop('checked', settings.extraction_structured_output).on('input', function () {
+        settings.extraction_structured_output = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+    $('#lore_graph_extract').on('click', () => onExtract('changed'));
+    $('#lore_graph_extract_all').on('click', () => onExtract('all'));
+    $('#lore_graph_stop').on('click', () => state.extraction?.abort());
+    $('#lore_graph_browse').on('click', onBrowse);
+    $('#lore_graph_dupes_find').on('click', onFindDuplicates);
+    $('#lore_graph_dupes_review').on('click', onReviewDuplicates);
 
     eventSource.on(event_types.CHAT_CHANGED, () => {
         if (getSettings().enabled) {

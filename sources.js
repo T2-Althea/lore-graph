@@ -242,6 +242,9 @@ export async function removeImport(url, index) {
     if (entry?.scope !== SCOPE_IMPORTED) {
         return;
     }
-    await deleteFile(url);
+    // Keep the entry if the file couldn't be deleted, so the user sees it and can retry.
+    if (!await deleteFile(url)) {
+        throw new Error(`Could not delete the stored copy of "${entry.name}". It is still in the list; try again.`);
+    }
     delete index.docs[url];
 }

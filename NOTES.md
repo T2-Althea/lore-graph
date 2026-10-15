@@ -115,3 +115,30 @@ Oct 2026). Paths are relative to the SillyTavern root.
   imported); the other is shown with an error and its chunks aren't used.
 - Token counts come from `getTokenCountAsync` (the current API's tokenizer), so
   exact counts — and whether a long section splits — can vary by model.
+
+## Graph extraction (M2)
+- One call per chunk via `ConnectionManagerRequestService.sendRequest` with
+  `extractData: false`, so we read the raw response: content via
+  `context.extractMessageFromData(raw, apiType)` and `finish_reason` to detect replies
+  cut off by the token limit (thinking models can spend the whole limit reasoning and
+  return empty content). Strict JSON is requested with `overridePayload.json_schema`
+  (the backend maps it to `response_format` for NanoGPT and most OpenAI-style sources).
+- Answers are always validated locally (`schema.js`), retried once with the error
+  explained, and failures are stored with the reason and the start of the reply.
+- Rate/usage-limit errors (429 etc.) wait 20s, then 60s, then pause the run.
+- `lore-graph_graph.json`: `{ chunkResults: { [chunkId]: { hash, status, entities,
+  relations, notes, error, ... } }, decisions: { merges, rejected, pending }, graph }`.
+  The graph is rebuilt from `chunkResults` (no LLM) by `graph.js buildGraph`:
+  names/aliases are matched with `normalizeKey` (case, leading article, punctuation,
+  last-word plural) and unioned; placeholder = never `defined_here`.
+- Measured: GLM 5.3 thinking via NanoGPT took ~3 minutes for one chunk (15 entities,
+  20 relations, good quality). Calls are sequential because each sees the entity list.
+- Each call only carries known entities whose name/alias appears in the chunk (or that
+  were found elsewhere in the same section): `graph.js selectRelevantEntities`. Keeps
+  input ~1.3k tokens/chunk no matter how large the library gets.
+- Parallel extraction: `extraction_concurrency` workers (default 3) share one queue; saves
+  are chained so an older snapshot can never land after a newer one. Each request has a
+  time limit (`extraction_timeout_seconds`, default 180) via its own AbortController.
+- The graph file is re-read (`loadGraphStore({ fresh: true })`) before any change, so a
+  second tab with an older copy can't overwrite newer results; an unreadable file stops
+  the operation instead of starting from an empty graph.

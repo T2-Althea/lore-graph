@@ -30,6 +30,62 @@
             <hr />
             <h4>Chunks</h4>
             <div id="lore_graph_chunks" class="lore_graph_chunks"></div>
+
+            <hr />
+            <h4>Graph extraction</h4>
+            <small class="lore_graph_hint">An AI reads each chunk once and lists the things and relationships in it. Only new or changed chunks are sent. Nothing runs until you confirm.</small>
+            <label for="lore_graph_profile">Connection profile used for extraction</label>
+            <select id="lore_graph_profile" class="text_pole"></select>
+            <details class="lore_graph_advanced">
+                <summary>Advanced</summary>
+                <label for="lore_graph_max_tokens">Max response tokens per chunk</label>
+                <input id="lore_graph_max_tokens" class="text_pole" type="number" min="500" max="32000" step="100" />
+                <label for="lore_graph_concurrency">Chunks to extract at the same time</label>
+                <input id="lore_graph_concurrency" class="text_pole" type="number" min="1" max="8" step="1" />
+                <small class="lore_graph_hint">Higher is faster if your provider allows it. Lower it if you get rate-limit pauses.</small>
+                <label for="lore_graph_timeout">Time limit per request (seconds, 0 = no limit)</label>
+                <input id="lore_graph_timeout" class="text_pole" type="number" min="0" max="1800" step="10" />
+                <small class="lore_graph_hint">A request with no answer by then is cancelled and retried once. "Thinking" models may need 300 or more.</small>
+                <label class="checkbox_label" for="lore_graph_structured">
+                    <input id="lore_graph_structured" type="checkbox" />
+                    <span>Use strict JSON mode (turn off if your provider rejects it)</span>
+                </label>
+            </details>
+            <div class="flex-container">
+                <div id="lore_graph_extract" class="menu_button menu_button_icon" title="Extract chunks that are new, changed, or failed">
+                    <i class="fa-solid fa-diagram-project"></i>
+                    <span>Extract new &amp; changed</span>
+                </div>
+                <div id="lore_graph_extract_all" class="menu_button menu_button_icon" title="Re-extract every chunk, even unchanged ones">
+                    <i class="fa-solid fa-arrows-rotate"></i>
+                    <span>Re-extract everything</span>
+                </div>
+                <div id="lore_graph_stop" class="menu_button menu_button_icon redWarningBG" style="display: none;">
+                    <i class="fa-solid fa-stop"></i>
+                    <span>Stop</span>
+                </div>
+            </div>
+            <progress id="lore_graph_progress" class="lore_graph_progress" value="0" max="1" style="display: none;"></progress>
+            <div id="lore_graph_extract_status" class="lore_graph_status"></div>
+
+            <hr />
+            <h4>Graph</h4>
+            <div id="lore_graph_summary" class="lore_graph_status"></div>
+            <div class="flex-container">
+                <div id="lore_graph_browse" class="menu_button menu_button_icon">
+                    <i class="fa-solid fa-magnifying-glass"></i>
+                    <span>Browse graph</span>
+                </div>
+                <div id="lore_graph_dupes_find" class="menu_button menu_button_icon" title="One AI call that suggests entities which are probably the same thing">
+                    <i class="fa-solid fa-clone"></i>
+                    <span>Find possible duplicates</span>
+                </div>
+                <div id="lore_graph_dupes_review" class="menu_button menu_button_icon" style="display: none;">
+                    <i class="fa-solid fa-list-check"></i>
+                    <span>Review suggestions</span>
+                </div>
+            </div>
+            <div id="lore_graph_failed" class="lore_graph_failed"></div>
         </div>
     </div>
 </div>

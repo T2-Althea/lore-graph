@@ -124,3 +124,117 @@
     font-size: 0.85em;
     opacity: 0.75;
 }
+
+#lore_graph_settings .lore_graph_progress {
+    width: 100%;
+}
+
+#lore_graph_settings .lore_graph_advanced {
+    margin: 4px 0;
+}
+
+#lore_graph_settings .lore_graph_advanced summary {
+    cursor: pointer;
+    opacity: 0.8;
+}
+
+.lore_graph_failed .lore_graph_row {
+    font-size: 0.9em;
+}
+
+.lore_graph_row {
+    padding: 4px 2px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor);
+}
+
+.lore_graph_row_sub {
+    font-size: 0.85em;
+    opacity: 0.75;
+}
+
+.lore_graph_entity_row {
+    cursor: pointer;
+}
+
+.lore_graph_entity_row:hover {
+    background-color: var(--white20a, rgba(255, 255, 255, 0.08));
+}
+
+.lore_graph_placeholder {
+    color: var(--warning, #e5a50a);
+    font-style: italic;
+}
+
+.lore_graph_tabs {
+    display: flex;
+    gap: 4px;
+    margin: 6px 0;
+}
+
+.lore_graph_tab.active {
+    border-color: var(--SmartThemeQuoteColor);
+    font-weight: bold;
+}
+
+.lore_graph_filters input[type="search"] {
+    flex: 1;
+}
+
+.lore_graph_filters select {
+    width: auto;
+}
+
+.lore_graph_browser_body {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+}
+
+.lore_graph_browser_body .lore_graph_list {
+    flex: 1;
+    min-width: 0;
+    max-height: 65vh;
+    overflow-y: auto;
+}
+
+.lore_graph_browser_body .lore_graph_detail {
+    flex: 1;
+    min-width: 0;
+    max-height: 65vh;
+    overflow-y: auto;
+}
+
+.lore_graph_relations {
+    padding-left: 16px;
+}
+
+.lore_graph_relations li {
+    margin-bottom: 6px;
+}
+
+@media (max-width: 768px) {
+    .lore_graph_browser_body {
+        flex-direction: column;
+    }
+}
+
+/* The graph browser uses SillyTavern's "large" popup, which is tall but only 500px wide. */
+.popup:has(.lore_graph_browser) {
+    width: 90dvw !important;
+    max-width: 1400px !important;
+}
+
+.lore_graph_browser .lore_graph_browser_body .lore_graph_list,
+.lore_graph_browser .lore_graph_browser_body .lore_graph_detail {
+    max-height: calc(90dvh - 230px);
+}
+
+.lore_graph_browser .lore_graph_browser_body .lore_graph_list {
+    flex: 2;
+}
+
+.lore_graph_browser .lore_graph_browser_body .lore_graph_detail {
+    flex: 3;
+    padding-left: 10px;
+    border-left: 1px solid var(--SmartThemeBorderColor);
+}
