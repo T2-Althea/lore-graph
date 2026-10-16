@@ -135,7 +135,9 @@ export function buildRetrievalIndex(graph, chunks, matching, { minAliasLength = 
                 tooShort.push({ name, entityId: entity.id });
                 continue;
             }
-            names.push({ form, name, entityId: entity.id, mode: matching.modes[form] ?? 'always' });
+            // "the made", "the cold": a one-word name keeps its article when matching, so it
+            // doesn't fire on every "made" or "cold". Modes stay keyed by the plain form.
+            names.push({ form: articledForm(name, form), name, entityId: entity.id, mode: matching.modes[form] ?? 'always' });
         }
     }
 
@@ -160,6 +162,18 @@ export function buildRetrievalIndex(graph, chunks, matching, { minAliasLength = 
     }
 
     return { entities, byId, adjacency, names, tooShort, hub, chunkWords, entitiesByChunk, idf, chunkById: new Map(chunks.map(c => [c.id, c])) };
+}
+
+/** matchForm, but a leading "the"/"a"/"an" is kept (matchForm drops it). */
+function matchFormKeepingArticle(text) {
+    return matchForm(`zzq ${text}`).replace(/^zzq ?/, '');
+}
+
+/** The form to match a name by: one-word names keep their article ("the made" stays "the made"). */
+function articledForm(name, form) {
+    if (form.includes(' ')) return form;
+    const withArticle = matchFormKeepingArticle(name);
+    return /^(the|a|an) /.test(withArticle) ? withArticle : form;
 }
 
 // Common words that carry no topic. Short words (under 4 letters) are skipped anyway.
@@ -209,7 +223,7 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
     scanned.forEach((text, i) => {
         const age = scanned.length - 1 - i; // 0 = newest
         const weight = Math.pow(s.recencyDecay, age);
-        const haystack = ` ${matchForm(text)} `;
+        const haystack = ` ${matchFormKeepingArticle(text)} `;
         for (const { form, name, entityId, mode } of index.names) {
             if (!haystack.includes(` ${form} `)) continue;
             const previous = hits.get(entityId);
@@ -259,16 +273,20 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
     const hitFactor = (rank, weak) => Math.max(0.5, 1 - 0.15 * rank) * (weak ? s.weakMeaningFactor : 1);
     // Entity descriptions are one short sentence, so their matches are looser than chunk matches,
     // and on their own they're not enough ("Nice weather today." matches "Weather sense").
-    // They count only alongside other evidence: a chunk matched by meaning, or any lore name
-    // in the messages (even an everyday one that wasn't allowed to count by itself).
-    // Likewise, with no lore names at all, chunk matches that only just cleared the threshold
+    // They count only alongside other evidence: a chunk matched by meaning, or a lore name that
+    // counted. An everyday name that wasn't allowed to count vouches only for a matched chunk
+    // that mentions it; with hundreds of everyday names, almost any sentence contains one.
+    // Likewise, without such a name, chunk matches that only just cleared the threshold
     // aren't trusted on their own ("How are you feeling?" weakly matches mana perception).
-    const meaningTrusted = hits.size > 0 || (meaning?.chunks ?? []).some(c => !c.weak);
+    const meaningChunkIds = new Set((meaning?.chunks ?? []).map(c => c.id));
+    const vouched = seeds.length > 0 || ignored.some(i => i.reason !== 'set to Never match'
+        && index.byId.get(i.entityId)?.sourceChunks.some(id => meaningChunkIds.has(id)));
+    const meaningTrusted = vouched || (meaning?.chunks ?? []).some(c => !c.weak);
     if (meaning && !meaningTrusted && ((meaning.chunks?.length ?? 0) || (meaning.entities?.length ?? 0))) {
         meaningSkipped = 'Only weak meaning matches and no lore names in the messages, so meaning matches were not used.';
         meaning = null;
     }
-    const entityMeaningAllowed = (meaning?.chunks?.length ?? 0) > 0 || hits.size > 0;
+    const entityMeaningAllowed = (meaning?.chunks?.length ?? 0) > 0 || vouched;
     for (const { id, rank } of entityMeaningAllowed ? (meaning?.entities ?? []) : []) {
         addMeaningSeed(id, s.meaningSeedScore * hitFactor(rank, false) * s.entityMeaningFactor, `entity match #${rank + 1}`);
     }
