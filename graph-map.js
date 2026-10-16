@@ -12,6 +12,7 @@ const TYPE_COLORS = {
     Organization: '#5c9dff', Role: '#9b8cff', Rank: '#c792ea', Place: '#4caf50', Creature: '#ef5350',
     Species: '#ff8a65', Phenomenon: '#26c6da', Material: '#ffca28', Object: '#a1887f', Credential: '#f06292',
     Procedure: '#7cb342', Rule: '#ab47bc', Event: '#ffa726', Concept: '#90a4ae',
+    Story: '#ff79c6', // people/places from this chat's memories
 };
 const GUARDRAIL_TYPES = new Set(['contrasts_with', 'exception_to']);
 /** Entities in more chunks than this are "hubs" that connect to everything. */
@@ -86,7 +87,11 @@ export function highlightFromReport(report, idByName) {
  * @param {ReturnType<typeof highlightFromReport>} [options.highlight] from a lore report
  * @param {string} [options.title]
  */
-export async function showGraphMap(graph, { onOpenChunk, focus, highlight, title = 'Lore map' }) {
+export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story = null, title = 'Lore map' }) {
+    // Story people/places from the open chat's memories, drawn alongside the lore.
+    if (story?.entities.length) {
+        graph = { entities: [...graph.entities, ...story.entities], edges: [...graph.edges, ...story.edges] };
+    }
     let cytoscape;
     try {
         cytoscape = await loadCytoscape();
@@ -115,6 +120,7 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, title
         doc: '',
         placeholdersOnly: false,
         hideHubs: true,
+        showStory: true,
     };
 
     const root = $(`
@@ -135,6 +141,7 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, title
                 <select class="text_pole lore_graph_map_doc"><option value="">All documents</option>${allDocs.map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('')}</select>
                 <label class="checkbox_label"><input type="checkbox" class="lore_graph_map_placeholders" /> <span>Placeholders only</span></label>
                 <label class="checkbox_label"><input type="checkbox" class="lore_graph_map_hubs" checked /> <span>Hide hubs</span></label>
+                ${story?.entities.length ? '<label class="checkbox_label"><input type="checkbox" class="lore_graph_map_story" checked /> <span>Story (this chat)</span></label>' : ''}
                 <div class="menu_button lore_graph_map_fit" title="Fit to screen"><i class="fa-solid fa-expand"></i></div>
             </div>
             <div class="lore_graph_map_body">
@@ -150,6 +157,7 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, title
         Object.entries(TYPE_COLORS).map(([type, color]) => `<span class="lore_graph_map_key"><i style="background:${color}"></i>${type}</span>`).join('')
         + '<span class="lore_graph_map_key"><i class="lore_graph_map_key_placeholder"></i>Placeholder</span>'
         + '<span class="lore_graph_map_key"><i class="lore_graph_map_key_guardrail"></i>Guardrail link</span>'
+        + (story?.entities.length ? '<span class="lore_graph_map_key"><i class="lore_graph_map_key_story"></i>Story link (from memories)</span>' : '')
         + (highlight ? '<span class="lore_graph_map_key"><i style="background:#4caf50"></i>Matched / path</span>' : ''));
 
     /** Which entities to draw for the current view. */
@@ -179,6 +187,7 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, title
             if (!entity) return false;
             if (id === view.focus && view.mode === 'around') return true;
             if (view.mode === 'highlight' && (highlight.seeds.has(id) || highlight.meaning.has(id))) return true;
+            if (!view.showStory && entity.story) return false;
             if (view.hideHubs && view.mode !== 'highlight' && isHub(id)) return false;
             if (view.type && entity.type !== view.type) return false;
             if (view.doc && !docsOf(entity).has(view.doc)) return false;
@@ -196,7 +205,7 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, title
     function buildElements(ids) {
         const nodes = [...ids].map(id => {
             const e = byId.get(id);
-            const classes = [e.placeholder ? 'placeholder' : '', id === view.focus && view.mode === 'around' ? 'focus' : ''];
+            const classes = [e.placeholder ? 'placeholder' : '', e.story ? 'story' : '', id === view.focus && view.mode === 'around' ? 'focus' : ''];
             if (highlight && view.mode === 'highlight') {
                 if (highlight.seeds.has(id)) classes.push('seed');
                 else if (highlight.meaning.has(id)) classes.push('meaning');
@@ -205,7 +214,7 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, title
             return { data: { id, label: e.name, color: TYPE_COLORS[e.type] ?? TYPE_COLORS.Concept, size: Math.min(e.sourceChunks.length, 12) }, classes: classes.filter(Boolean).join(' ') };
         });
         const edges = graph.edges.filter(e => ids.has(e.source) && ids.has(e.target)).map(e => {
-            const classes = [GUARDRAIL_TYPES.has(e.type) ? 'guardrail' : '', e.type === 'related_to' ? 'vague' : ''];
+            const classes = [GUARDRAIL_TYPES.has(e.type) ? 'guardrail' : '', e.type === 'related_to' ? 'vague' : '', e.type === 'story' ? 'storylink' : ''];
             if (highlight && view.mode === 'highlight' && (highlight.edges.has(`${e.source}|${e.target}`) || highlight.edges.has(`${e.target}|${e.source}`))) classes.push('path');
             return { data: { id: e.id, source: e.source, target: e.target, type: e.type, weight: e.weight }, classes: classes.filter(Boolean).join(' ') };
         });
@@ -264,10 +273,12 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, title
         root.find('.lore_graph_map_side').html(`
             <h4 class="${e.placeholder ? 'lore_graph_placeholder' : ''}">${escapeHtml(e.name)} <span class="lore_graph_badge">${escapeHtml(e.type)}</span></h4>
             ${e.placeholder ? '<div class="lore_graph_placeholder">Placeholder: mentioned but not defined in any loaded document.</div>' : ''}
-            <div>${escapeHtml(e.description || '(no description)')}</div>
+            ${e.story
+                ? `<div class="lore_graph_meta">From this chat's memories (${e.memories.length}):</div><ul>${e.memories.slice(-5).map(m => `<li>${escapeHtml(m)}</li>`).join('')}</ul>`
+                : `<div>${escapeHtml(e.description || '(no description)')}</div>
             ${e.aliases.length ? `<div class="lore_graph_meta">Also called: ${e.aliases.map(escapeHtml).join(', ')}</div>` : ''}
             <div class="lore_graph_meta">Defined in: ${e.definedIn.length ? chunkLinks(e.definedIn) : '—'}</div>
-            <div class="lore_graph_meta">Mentioned in: ${chunkLinks(e.sourceChunks)}</div>
+            <div class="lore_graph_meta">Mentioned in: ${chunkLinks(e.sourceChunks)}</div>`}
             <div class="menu_button lore_graph_map_center" data-id="${escapeHtml(id)}">Show around this</div>
             <h4>Relations (${links.length})</h4>
             <ul class="lore_graph_relations">${links.slice(0, 40).map(edge => {
@@ -284,6 +295,13 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, title
         }
         const edge = graph.edges.find(e => e.id === edgeId);
         if (!edge) return;
+        if (edge.type === 'story') {
+            root.find('.lore_graph_map_side').html(`
+                <h4>${escapeHtml(byId.get(edge.source)?.name ?? edge.source)} ⇄ ${escapeHtml(byId.get(edge.target)?.name ?? edge.target)}</h4>
+                <div class="lore_graph_meta">From this chat's memories:</div>
+                <ul>${edge.memories.map(text => `<li>${escapeHtml(text)}</li>`).join('')}</ul>`);
+            return;
+        }
         root.find('.lore_graph_map_side').html(`
             <h4>${escapeHtml(byId.get(edge.source)?.name ?? edge.source)} <span class="lore_graph_badge">${escapeHtml(edge.type)}</span> ${escapeHtml(byId.get(edge.target)?.name ?? edge.target)}</h4>
             <div>${escapeHtml(edge.evidence)}</div>
@@ -306,6 +324,7 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, title
     root.on('change', '.lore_graph_map_doc', function () { view.doc = String($(this).val()); draw(); });
     root.on('change', '.lore_graph_map_placeholders', function () { view.placeholdersOnly = $(this).prop('checked'); draw(); });
     root.on('change', '.lore_graph_map_hubs', function () { view.hideHubs = $(this).prop('checked'); draw(); });
+    root.on('change', '.lore_graph_map_story', function () { view.showStory = $(this).prop('checked'); draw(); });
     root.on('change', '.lore_graph_map_focus', function () {
         const name = String($(this).val()).trim().toLowerCase();
         const match = graph.entities.find(e => e.name.toLowerCase() === name) ?? graph.entities.find(e => e.aliases.some(a => a.toLowerCase() === name));
@@ -359,6 +378,8 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, title
                     },
                 },
                 { selector: 'edge.vague', style: { 'width': 1, 'opacity': 0.3 } },
+                { selector: 'node.story', style: { 'shape': 'diamond', 'color': '#ff79c6', 'width': 26, 'height': 26 } },
+                { selector: 'edge.storylink', style: { 'line-color': '#ff79c6', 'target-arrow-shape': 'none', 'line-style': 'dotted', 'width': 2, 'opacity': 0.8 } },
                 { selector: 'edge.guardrail', style: { 'line-color': '#e53935', 'target-arrow-color': '#e53935', 'line-style': 'dashed', 'opacity': 0.9 } },
                 { selector: 'edge.path', style: { 'line-color': '#4caf50', 'target-arrow-color': '#4caf50', 'width': 4, 'opacity': 1 } },
                 {

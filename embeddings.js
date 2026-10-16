@@ -200,3 +200,52 @@ export async function semanticSearch(queryText, settings, overrides = {}) {
         entities: toIds(entityHits, state.entities).map((id, rank) => ({ id, rank, weak: false })),
     };
 }
+
+// ---------------------------------------------------------------- story memories (Milestone 6c)
+
+/** Queries for memories ask for earlier story events, not world lore. */
+export const MEMORY_QUERY_INSTRUCTION = 'Instruct: Given a roleplay scene, retrieve earlier story events that are relevant to what is happening now\nQuery: ';
+export const DEFAULT_MEMORY_EMBEDDING_SETTINGS = {
+    memory_embed_top_k: 4,
+    memory_embed_threshold: 0.40, // short memory sentences score lower than lore chunks
+};
+
+/** Each chat (and each branch, which has its own chat id) gets its own memory collection. */
+export function memoryCollectionId(chatId) {
+    return `lore_graph_mem_${getStringHash(String(chatId))}`;
+}
+
+/** The vector hash used for a memory: its text, so an edited memory is re-embedded. */
+export const memoryVectorHash = (memory) => getStringHash(memory.text);
+
+/**
+ * Brings the chat's memory collection in line with its current memories. Cheap when nothing
+ * changed (one local list request), so it can run before every search.
+ * @param {string} chatId
+ * @param {object[]} memories
+ * @param {object} settings
+ */
+export async function syncMemoryVectors(chatId, memories, settings) {
+    if (!settings.embed_model) throw new Error('No embedding model is set (Meaning search section).');
+    const wanted = memories.filter(m => !m.superseded && m.text).map(m => ({ id: m.id, text: m.text }));
+    return await syncCollection(memoryCollectionId(chatId), wanted, settings);
+}
+
+/**
+ * Finds memories close in meaning to the scanned messages.
+ * @returns {Promise<number[]>} vector hashes of matching memories, best first
+ */
+export async function searchMemoryVectors(chatId, queryText, settings) {
+    const result = await vectorApi('query', settings, {
+        collectionId: memoryCollectionId(chatId),
+        searchText: MEMORY_QUERY_INSTRUCTION + queryText,
+        topK: settings.memory_embed_top_k ?? DEFAULT_MEMORY_EMBEDDING_SETTINGS.memory_embed_top_k,
+        threshold: settings.memory_embed_threshold ?? DEFAULT_MEMORY_EMBEDDING_SETTINGS.memory_embed_threshold,
+    });
+    return (result?.metadata ?? []).map(m => Number(m.hash));
+}
+
+/** Deletes a chat's memory vectors (when the chat is deleted). */
+export async function purgeMemoryVectors(chatId, settings) {
+    await vectorApi('purge', settings, { collectionId: memoryCollectionId(chatId) });
+}

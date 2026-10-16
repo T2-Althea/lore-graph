@@ -49,6 +49,7 @@ function renderMemorySection(report) {
     const selected = memory.selected.map(s => `<li>${escapeHtml(s.line.replace(/^- /, ''))}${s.reasons?.length ? ` <small>(${escapeHtml(s.reasons.join(', '))})</small>` : ''}</li>`).join('');
     return `<h4>Story memory</h4>
         <div class="lore_graph_meta">${modeText} ${memory.selected.length} memory(ies) sent, ${memory.tokens} tokens${cutCount ? `, ${cutCount} left out for budget` : ''}.</div>
+        ${memory.meaningError ? `<div class="lore_graph_status_warning">Meaning search over memories wasn't available: ${escapeHtml(memory.meaningError)} Recency and names were still used.</div>` : ''}
         ${selected ? `<ul>${selected}</ul>` : ''}
         ${hidden.length ? `<details><summary>${hidden.length} memory(ies) hidden: ${escapeHtml(memory.character ?? '')} didn't witness them and wasn't told</summary><ul>${hidden.map(h => `<li>${escapeHtml(h.text)}</li>`).join('')}</ul></details>` : ''}`;
 }

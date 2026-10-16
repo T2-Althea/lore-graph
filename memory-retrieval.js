@@ -36,6 +36,7 @@ export function knows(memory, name) {
  * @param {object} options
  * @param {string} options.character the character the AI is playing (single mode)
  * @param {string[]} [options.loreNames] lore entities matched for this reply (link memories to lore)
+ * @param {string[]} [options.meaningIds] memory ids found by meaning search, best first
  * @param {number} [options.budget]
  * @param {number} [options.recentCount]
  * @param {(text: string) => number|Promise<number>} countTokens
@@ -55,6 +56,7 @@ export async function selectMemories(state, messages, options, countTokens) {
         return form.replace(/\s/g, '').length >= 3 && haystack.includes(` ${form} `);
     };
     const loreForms = new Set((options.loreNames ?? []).map(matchForm));
+    const meaningRank = new Map((options.meaningIds ?? []).map((id, rank) => [id, rank]));
 
     // Newer memories score higher; things mentioned now score much higher.
     const recent = new Set(visible.slice(-recentCount));
@@ -68,6 +70,12 @@ export async function selectMemories(state, messages, options, countTokens) {
         for (const term of memory.loreTerms) {
             if (mentioned(term)) { score += 1; reasons.push(`mentions ${term}`); }
             else if (loreForms.has(matchForm(term))) { score += 0.6; reasons.push(`linked lore: ${term}`); }
+        }
+        // Close in meaning to the scene (only boosts memories this character may know).
+        if (meaningRank.has(memory.id)) {
+            const rank = meaningRank.get(memory.id);
+            score += Math.max(0.5, 1 - 0.15 * rank);
+            reasons.push(`meaning match #${rank + 1}`);
         }
         return { memory, score, reasons };
     }).sort((a, b) => b.score - a.score);
@@ -103,4 +111,60 @@ export async function selectMemories(state, messages, options, countTokens) {
         text: lines.join('\n'),
         tokens: used,
     };
+}
+
+/**
+ * Story people and places for the graph map (Milestone 6c): one node per character named in
+ * the chat's memories, linked to the lore entities their memories mention, and to each other
+ * when they share a memory. Lore nodes are left untouched.
+ * @param {object[]} memories the chat's memories
+ * @param {import('./graph.js').Entity[]} loreEntities
+ * @returns {{ entities: object[], edges: object[] }}
+ */
+export function buildStoryGraph(memories, loreEntities) {
+    const loreByForm = new Map();
+    for (const entity of loreEntities) {
+        for (const name of [entity.name, ...entity.aliases]) {
+            const form = matchForm(name);
+            if (form && !loreByForm.has(form)) loreByForm.set(form, entity.id);
+        }
+    }
+    const nodes = new Map();
+    const node = (name) => {
+        const id = `story:${lower(name)}`;
+        if (!nodes.has(id)) {
+            nodes.set(id, { id, name, type: 'Story', aliases: [], description: '', memories: [], sourceChunks: [], definedIn: [], placeholder: false, story: true });
+        }
+        return nodes.get(id);
+    };
+    const edges = new Map();
+    const addEdge = (source, target, memory) => {
+        const key = `story|${source}|${target}`;
+        const edge = edges.get(key);
+        if (edge) {
+            edge.weight++;
+            edge.memories.push(memory.text);
+        } else {
+            edges.set(key, { id: key, source, target, type: 'story', evidence: memory.text, memories: [memory.text], chunkId: '', chunkIds: [], weight: 1 });
+        }
+    };
+
+    for (const memory of memories.filter(m => !m.superseded && m.text)) {
+        const people = [...new Set(memory.characters)].map(node);
+        people.forEach(p => p.memories.push(memory.text));
+        for (const person of people) {
+            for (const term of memory.loreTerms) {
+                const loreId = loreByForm.get(matchForm(term));
+                if (loreId) addEdge(person.id, loreId, memory);
+            }
+        }
+        for (let i = 0; i < people.length; i++) {
+            for (let j = i + 1; j < people.length; j++) addEdge(people[i].id, people[j].id, memory);
+        }
+    }
+    for (const n of nodes.values()) {
+        n.description = n.memories.slice(-3).join(' ');
+        n.sourceChunks = [];
+    }
+    return { entities: [...nodes.values()], edges: [...edges.values()] };
 }

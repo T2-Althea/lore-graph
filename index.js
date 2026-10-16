@@ -20,6 +20,8 @@ import { editTestPopup, loadTests, runTest, saveTests, showTestList } from './te
 import { highlightFromReport, showGraphMap } from './graph-map.js';
 import { countUnprocessed, extractMemories, getMemoryState, saveMemoryState, validateMemories } from './memory.js';
 import { showMemoryList } from './memory-view.js';
+import { buildStoryGraph } from './memory-retrieval.js';
+import { purgeMemoryVectors } from './embeddings.js';
 
 const MODULE_NAME = 'lore_graph';
 const EXTENSION_FOLDER = 'third-party/lore-graph';
@@ -663,7 +665,11 @@ async function getCurrentGraph() {
 
 async function openGraphMap() {
     const graph = await getCurrentGraph();
-    if (graph) showGraphMap(graph, { onOpenChunk: openChunkById });
+    if (!graph) return;
+    // People and places from the open chat's memories (Milestone 6c).
+    const memoryState = SillyTavern.getContext().chatId ? getMemoryState() : null;
+    const story = memoryState?.memories.length ? buildStoryGraph(memoryState.memories, graph.entities) : null;
+    showGraphMap(graph, { onOpenChunk: openChunkById, story });
 }
 
 /** Opens the map showing what a lore report matched and the paths it followed. */
@@ -1069,6 +1075,13 @@ function bindMemory() {
             else renderMemoryStatus();
         }, 500);
     });
+    // A deleted chat's memory search data is removed too (its memories went with the chat).
+    for (const event of [event_types.CHAT_DELETED, event_types.GROUP_CHAT_DELETED]) {
+        eventSource.on(event, (chatId) => {
+            const current = getSettings();
+            if (current.embed_model && chatId) purgeMemoryVectors(chatId, current).catch(() => { });
+        });
+    }
     for (const event of [event_types.MESSAGE_DELETED, event_types.MESSAGE_EDITED, event_types.MESSAGE_SWIPED, event_types.CHAT_CHANGED]) {
         eventSource.on(event, onChatHistoryChanged);
     }

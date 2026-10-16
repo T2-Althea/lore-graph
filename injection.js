@@ -7,7 +7,7 @@ import { buildGraph } from './graph.js';
 import { loadGraphStore } from './extraction.js';
 import { loadMatching, matchingRevision } from './matching.js';
 import { buildRetrievalIndex, retrieve } from './retrieval.js';
-import { DEFAULT_EMBEDDING_SETTINGS, buildQueryText, semanticSearch } from './embeddings.js';
+import { DEFAULT_EMBEDDING_SETTINGS, DEFAULT_MEMORY_EMBEDDING_SETTINGS, buildQueryText, memoryVectorHash, searchMemoryVectors, semanticSearch, syncMemoryVectors } from './embeddings.js';
 import { getMemoryState } from './memory.js';
 import { selectMemories } from './memory-retrieval.js';
 
@@ -25,6 +25,7 @@ export const DEFAULT_INJECTION_SETTINGS = {
     inject_scan: false, // let World Info scan the injected lore
     inject_template: 'Relevant world lore for this scene, from the setting\'s codices:\n{{text}}',
     ...DEFAULT_EMBEDDING_SETTINGS,
+    ...DEFAULT_MEMORY_EMBEDDING_SETTINGS,
     memory_inject: true,  // send the open chat's memories (only does anything once memories exist)
     memory_budget: 600,
 };
@@ -103,16 +104,32 @@ export async function runMemorySelection(scannedMessages, settings, loreNames = 
     const state = getMemoryState();
     if (!state?.memories.length) return null;
     const character = context.name2;
+
+    // Meaning search over this chat's memories (optional; names and recency still work without it).
+    let meaningIds = [];
+    let meaningError = null;
+    if (settings.embed_enabled && settings.embed_model) {
+        try {
+            await syncMemoryVectors(context.chatId, state.memories, settings);
+            const hashes = await searchMemoryVectors(context.chatId, buildQueryText(scannedMessages), settings);
+            meaningIds = hashes.map(h => state.memories.find(m => memoryVectorHash(m) === h)?.id).filter(Boolean);
+        } catch (error) {
+            meaningError = String(error?.message ?? error);
+            console.warn('Lore Graph: memory meaning search unavailable', error);
+        }
+    }
+
     const selection = await selectMemories(state, scannedMessages, {
         character,
         loreNames,
+        meaningIds,
         budget: settings.memory_budget,
     }, (text) => getTokenCountAsync(text));
     // The exact character name is used (not the {{char}} macro) so group chats get the right one.
     const promptText = selection.text
         ? `${MEMORY_HEADERS[selection.mode].replace('[CHARACTER]', character || 'the character')}\n${selection.text}`
         : '';
-    return { ...selection, promptText };
+    return { ...selection, promptText, meaningIds, meaningError };
 }
 
 export function clearInjection(settings) {

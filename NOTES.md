@@ -248,3 +248,18 @@ Oct 2026). Paths are relative to the SillyTavern root.
   avoids em dashes. Works even when no lore is loaded.
 - Reports and per-reply records gain a "Story memory" section: what was sent and why,
   and what was hidden because the character didn't witness it.
+
+## Chat memory, step 6c (meaning search + story on the map)
+- Memories are embedded into their own collection per chat, `lore_graph_mem_<hash of
+  chatId>`, through the same vllm/LM Studio path as lore (hash = text hash, so edits
+  re-embed). Synced lazily before each reply when meaning search is on; replaced memories
+  are removed. Purged on CHAT_DELETED / GROUP_CHAT_DELETED.
+- Query uses its own instruction ("retrieve earlier story events…"). Calibrated on a
+  fake scene: relevant memories 0.41–0.61, casual lines ≤0.37, so threshold 0.40, top 4.
+- A meaning hit adds max(0.5, 1 − 0.15·rank) to a memory's score (reason "meaning match
+  #k"). Witness filtering still applies first, so it never leaks secrets. If LM Studio is
+  down, the report says so and names/recency are used.
+- `buildStoryGraph`: one pink diamond per character named in memories, dotted links to
+  lore entities their memories mention (matched by name/alias) and to characters they
+  share a memory with. Shown on the lore map with a "Story (this chat)" toggle; clicking
+  a story person lists their memories. Lore graph files are never changed.

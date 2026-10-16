@@ -435,3 +435,10 @@
 .lore_graph_memory_editor input.text_pole {
     width: 100%;
 }
+
+.lore_graph_map_key i.lore_graph_map_key_story {
+    width: 18px;
+    height: 0;
+    border-radius: 0;
+    border-top: 2px dotted #ff79c6;
+}
