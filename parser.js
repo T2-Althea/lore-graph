@@ -53,8 +53,11 @@ const GUARDRAIL_RE = /^[✕✖×X]\s*Not\s+This\s*:?$/i;
  * @returns {boolean}
  */
 export function looksLikeLoreDocument(text) {
-    const lines = normalizeText(text).split('\n').slice(0, 15);
-    return lines.some(line => DOC_ID_RE.test(line.trim()));
+    const lines = normalizeText(text).split('\n').map(line => line.trim());
+    if (lines.slice(0, 15).some(line => DOC_ID_RE.test(line))) return true;
+    // No Doc ID: still a lore file if a numbered heading is followed by a TL;DR line near the top.
+    const top = lines.slice(0, 60).filter(Boolean);
+    return top.some((line, i) => SECTION_HEADING_RE.test(line) && TLDR_RE.test(top[i + 1] ?? ''));
 }
 
 /**

@@ -115,14 +115,14 @@ async function processSource(source, existing) {
     }
 
     const textHash = getStringHash(text);
-    if (existing && existing.textHash === textHash && existing.parserVersion === PARSER_VERSION && existing.status !== 'error') {
+    if (existing && existing.textHash === textHash && existing.parserVersion === PARSER_VERSION && existing.status !== 'error' && existing.status !== 'skipped') {
         const changed = existing.name !== source.name || existing.scope !== source.scope;
         return { entry: { ...existing, name: source.name, scope: source.scope }, changed };
     }
 
     if (!looksLikeLoreDocument(text)) {
         return {
-            entry: { ...base, status: 'skipped', textHash, parserVersion: PARSER_VERSION, parsedAt: Date.now(), error: 'Not a lore file (no "Doc ID:" line near the top).' },
+            entry: { ...base, status: 'skipped', textHash, parserVersion: PARSER_VERSION, parsedAt: Date.now(), error: 'Not a lore file (no "Doc ID:" line, and no numbered section with a TL;DR near the top).' },
             changed: true,
         };
     }
@@ -223,7 +223,7 @@ export function getActiveChunks(index, activeUrls) {
 export async function importFile(file, index) {
     const text = await file.text();
     if (!looksLikeLoreDocument(text)) {
-        throw new Error(`"${file.name}" doesn't look like a lore file (no "Doc ID:" line near the top).`);
+        throw new Error(`"${file.name}" doesn't look like a lore file (no "Doc ID:" line, and no numbered section followed by a "TL;DR:" line near the top).`);
     }
     const baseName = toSafeFileName(file.name.replace(/\.[^.]+$/, ''));
     const fileName = `${FILE_PREFIX}import_${baseName}_${Date.now()}.txt`;
