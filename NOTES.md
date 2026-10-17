@@ -263,3 +263,23 @@ Oct 2026). Paths are relative to the SillyTavern root.
   lore entities their memories mention (matched by name/alias) and to characters they
   share a memory with. Shown on the lore map with a "Story (this chat)" toggle; clicking
   a story person lists their memories. Lore graph files are never changed.
+
+## Setting-independent checks (0.4.0)
+- Tests are matched to documents by the part of the chunk id before " §" (the Doc ID, or the file
+  name when there is no Doc ID line). "Run all tests" skips a test when any document it expects
+  isn't loaded ("Needs COS-004, which isn't loaded") and doesn't count it as a failure. If the
+  document is loaded but an expected section is gone (renamed), the test runs and fails, naming
+  the missing section. "Inject nothing" tests always run. Logic in `test-check.js` (pure).
+- A new test list starts with two casual lines only (no setting-specific starter tests).
+- "Suggest tests": one AI call with up to 30 sections (id, title, TL;DR or first sentences;
+  sections without tests first, spread over documents). The reply is checked locally (unknown
+  section ids dropped, duplicates dropped), every suggestion is run once, and the user ticks
+  which to keep. The suggestion shows whether it passes now.
+- The meaning-search sanity check no longer uses fixed sentences: it searches for up to 6
+  sections by their own TL;DR (spread over documents and through each document) and expects the
+  section in the top 5, plus the casual lines, which should match nothing.
+- AI instructions (extraction, duplicates, everyday words, memory) use invented examples instead
+  of terms from one setting, and the default injection header no longer says "codices".
+- `loadJsonFile` retries a read that returns half-written JSON (seen when the panel refreshed the
+  graph summary while extraction was saving the graph file).
+- Local test setup: see `dev/README.md`.

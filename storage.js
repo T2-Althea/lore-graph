@@ -74,11 +74,19 @@ export async function saveJsonFile(fileName, data) {
  * @returns {Promise<any|null>} parsed JSON, or null if the file doesn't exist
  */
 export async function loadJsonFile(fileName) {
-    const text = await loadTextFile(getFileUrl(fileName));
-    if (text === null) {
-        return null;
+    // A read that lands while the same file is being saved can see it half-written; try again shortly.
+    for (const wait of [300, 1000, 0]) {
+        const text = await loadTextFile(getFileUrl(fileName));
+        if (text === null) {
+            return null;
+        }
+        try {
+            return JSON.parse(text);
+        } catch (error) {
+            if (!wait) throw error;
+            await new Promise(resolve => setTimeout(resolve, wait));
+        }
     }
-    return JSON.parse(text);
 }
 
 /**

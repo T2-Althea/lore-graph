@@ -101,10 +101,10 @@ const EVERYDAY_SCHEMA = {
     },
 };
 
-const EVERYDAY_INSTRUCTIONS = `You help a fantasy roleplay tool decide which lore terms can be matched in chat safely.
-You get a list of names from the setting's lore. Return the names that are ALSO ordinary words or phrases a character could easily say in this fantasy roleplay WITHOUT meaning the specific lore concept.
-Examples of everyday names: "plate" (a plate of food), "smell", "weight", "strength", "failure", "renewal", "focus", "form", "character", "branch".
-NOT everyday: names that mean the same thing whenever they are said in a fantasy story, such as creatures, peoples, materials, places, schools of magic and specific institutions ("undead", "dragon", "elves", "manacite", "Evocation", "Guild", "Velmara", "Rank Plate").
+const EVERYDAY_INSTRUCTIONS = `You help a roleplay tool decide which lore terms can be matched in chat safely.
+You get a list of names from the setting's lore. Return the names that are ALSO ordinary words or phrases a character could easily say in a roleplay WITHOUT meaning the specific lore concept.
+Examples of everyday names: "seal" (a seal on a letter), "smell", "weight", "strength", "failure", "renewal", "focus", "form", "character", "branch".
+NOT everyday: names that mean the same thing whenever they are said in a story set in this world, such as creatures, peoples, materials, places, schools of magic, technologies and specific institutions ("wraith", "dragon", "elves", "ironglass", "Hollow Court", "Warden's Seal").
 Return JSON: { "everyday": ["<exact name from the list>", ...] }. Use names exactly as given. Return an empty array if none.`;
 
 const EVERYDAY_BATCH_SIZE = 60;

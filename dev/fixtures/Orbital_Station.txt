@@ -1,0 +1,24 @@
+Kestrel Station — Life Aboard
+
+1. The Station
+TL;DR: Kestrel Station is a mining platform in orbit around a gas giant. Its crew rotates every ninety days and lives by the Ration Ledger.
+
+Kestrel Station hangs above the storms of a gas giant and skims helium from the upper clouds. Around four hundred people live aboard on ninety-day rotations. Air, water and food are tracked in the Ration Ledger, and every crew member checks their allowance at the start of each shift.
+
+---
+
+2. Vacuum Drills
+TL;DR: Every crew member practises a vacuum drill each week. A failed drill grounds them from outer-ring work until they pass again.
+
+# The Drill
+When the klaxon sounds twice, crew seal their section and pull on emergency hoods within thirty seconds. The drill officer times every person.
+
+# Failing a Drill
+A crew member who misses the time limit is grounded from outer-ring work until they pass a retest.
+
+---
+
+3. The Spinward Market
+TL;DR: The Spinward Market is the station's only open market, where off-shift crew trade spare ration credits.
+
+Off-shift crew meet in the Spinward Market to trade spare ration credits, music and homegrown herbs. Station security tolerates the market as long as nobody trades oxygen.

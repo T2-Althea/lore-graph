@@ -23,7 +23,7 @@ export const DEFAULT_INJECTION_SETTINGS = {
     inject_depth: 4,
     inject_role: 0,     // extension_prompt_roles.SYSTEM
     inject_scan: false, // let World Info scan the injected lore
-    inject_template: 'Relevant world lore for this scene, from the setting\'s codices:\n{{text}}',
+    inject_template: 'Relevant world lore for this scene:\n{{text}}',
     ...DEFAULT_EMBEDDING_SETTINGS,
     ...DEFAULT_MEMORY_EMBEDDING_SETTINGS,
     memory_inject: true,  // send the open chat's memories (only does anything once memories exist)

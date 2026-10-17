@@ -16,7 +16,8 @@ import { matchForm } from './schema.js';
 import { showRetrievalReport } from './report-view.js';
 import { loadEmbeddingState, semanticSearch, syncEmbeddingIndex } from './embeddings.js';
 import { addMessageButtons, attachPendingReport, expandRecord, getRecord, setPendingReport } from './inspector.js';
-import { editTestPopup, loadTests, runTest, saveTests, showTestList } from './tests.js';
+import { editTestPopup, loadTests, reviewSuggestionsPopup, runTest, saveTests, showTestList, suggestTests, summarizeRuns } from './tests.js';
+import { CASUAL_LINES, pickSanityQueries, sectionKey } from './test-check.js';
 import { highlightFromReport, showGraphMap } from './graph-map.js';
 import { countUnprocessed, extractMemories, getMemoryState, saveMemoryState, validateMemories } from './memory.js';
 import { showMemoryList } from './memory-view.js';
@@ -885,10 +886,9 @@ function renderTestSummary() {
         el.text('');
         return;
     }
-    const ran = tests.filter(t => t.last);
-    const passed = ran.filter(t => t.last.pass).length;
-    const latest = ran.length ? Math.max(...ran.map(t => t.last.at)) : 0;
-    el.text(`${tests.length} test(s).${ran.length ? ` Last run (${new Date(latest).toLocaleString()}): ${passed} of ${ran.length} passed.` : ' Not run yet.'}`);
+    const withRun = tests.filter(t => t.last);
+    const latest = withRun.length ? Math.max(...withRun.map(t => t.last.at)) : 0;
+    el.text(`${tests.length} test(s).${withRun.length ? ` Last run (${new Date(latest).toLocaleString()}): ${summarizeRuns(tests).text}.` : ' Not run yet.'}`);
 }
 
 async function runOneTest(test) {
@@ -970,12 +970,62 @@ async function onRunAllTests() {
         renderTestSummary();
     }
     if (results.length) {
-        const passed = results.filter(r => r.pass).length;
+        const ran = results.filter(r => !r.skipped);
+        const passed = ran.filter(r => r.pass).length;
+        const skipped = results.length - ran.length;
         if (!getSettings().embed_enabled) {
             toastr.info('Meaning search is off, so tests that rely on it may fail.', 'Lore Graph');
         }
         showTestList(tests, results, testListHandlers);
-        (passed === results.length ? toastr.success : toastr.warning)(`${passed} of ${results.length} tests passed.`, 'Lore Graph');
+        const text = `${passed} of ${ran.length} tests passed.${skipped ? ` ${skipped} skipped because their lore isn't loaded.` : ''}`;
+        (passed === ran.length ? toastr.success : toastr.warning)(text, 'Lore Graph');
+    }
+}
+
+async function onSuggestTests() {
+    if (state.testsRunning) return;
+    const tests = await getTests();
+    if (!tests) return;
+    const chunks = getCurrentChunks();
+    if (!chunks.length) {
+        toastr.info('No chunks loaded. Click Rescan first.', 'Lore Graph');
+        return;
+    }
+    const settings = getSettings();
+    let profile;
+    try {
+        profile = getUsableProfile(settings.extraction_profile);
+    } catch (error) {
+        toastr.warning(String(error?.message ?? error), 'Lore Graph');
+        return;
+    }
+    state.testsRunning = true;
+    const button = $('#lore_graph_tests_suggest').addClass('disabled');
+    const statusEl = $('#lore_graph_tests_summary');
+    try {
+        statusEl.text(`Asking ${profile.name} for test lines (one AI call)…`);
+        const suggestions = await suggestTests(chunks, tests, profile, settings);
+        const rows = [];
+        for (let i = 0; i < suggestions.length; i++) {
+            statusEl.text(`Trying suggestion ${i + 1} of ${suggestions.length}…`);
+            const s = suggestions[i];
+            const result = await runTest({ text: s.text, expected: s.expected, nothing: s.kind === 'casual' }, chunks, settings);
+            rows.push({ ...s, pass: result.pass, missing: result.missing, injected: result.injected });
+        }
+        renderTestSummary();
+        const added = await reviewSuggestionsPopup(rows);
+        if (added.length) {
+            tests.push(...added);
+            await saveTests(tests);
+            toastr.success(`${added.length} test(s) added.`, 'Lore Graph');
+        }
+    } catch (error) {
+        console.error('Lore Graph: suggesting tests failed', error);
+        toastr.error(String(error?.message ?? error), 'Lore Graph');
+    } finally {
+        state.testsRunning = false;
+        button.removeClass('disabled');
+        renderTestSummary();
     }
 }
 
@@ -1097,6 +1147,7 @@ function bindInspectorAndTests() {
     $('#lore_graph_save_test').on('click', onSaveAsTest);
     $('#lore_graph_tests_run').on('click', onRunAllTests);
     $('#lore_graph_tests_open').on('click', onOpenTestList);
+    $('#lore_graph_tests_suggest').on('click', onSuggestTests);
     $(document).on('click', '.lore_graph_mes_button', onMessageLoreClick);
 
     addMessageButtons();
@@ -1271,33 +1322,53 @@ async function onBuildEmbeddingIndex() {
     }
 }
 
-/** Test searches from CLAUDE.md: [query, chunk ids expected near the top]. */
-const SANITY_QUERIES = [
-    ['handing my rank plate to the checkpoint clerk', ['COS-006 §7 The Rank Plate']],
-    ['The stone down here feels wrong. It reads like someone, not something.', ['COS-004 §15 Aberrant Labyrinths', 'COS-004 §3 Ambient Reading']],
-    ['Haha, nice weather today. Want to grab some food and talk about your family?', []],
-];
-
+/**
+ * Meaning-search sanity check, built from the loaded lore so it works for any setting: each
+ * picked section's TL;DR should find that section near the top, and casual chat should find
+ * nothing above the threshold. Random-looking rankings point at a broken model file.
+ */
 async function onEmbeddingSanityCheck() {
     const settings = getSettings();
+    const chunks = getCurrentChunks();
+    if (!chunks.length) {
+        toastr.info('No chunks loaded. Click Rescan first.', 'Lore Graph');
+        return;
+    }
     const button = $('#lore_graph_embed_check').addClass('disabled');
     try {
+        const sectionOf = new Map(chunks.map(c => [c.id, sectionKey(c)]));
         const rows = [];
-        for (const [query, expected] of SANITY_QUERIES) {
-            // Top 5 regardless of threshold to see the ranking, plus the real threshold to see what would be used.
+        let found = 0;
+        const queries = pickSanityQueries(chunks);
+        for (const { query, section, label } of queries) {
             const wide = await semanticSearch(query, settings, { topK: 5, threshold: 0 });
             const used = await semanticSearch(query, settings);
             const usedIds = new Set(used.chunks.map(c => c.id));
-            const found = expected.filter(id => wide.chunks.some(c => c.id.startsWith(id)));
-            const ok = expected.length ? found.length === expected.length : used.chunks.length === 0;
+            const ok = wide.chunks.some(c => sectionOf.get(c.id) === section);
+            if (ok) found++;
             rows.push(`
-                <h4>${ok ? '✅' : '⚠'} "${escapeHtml(query)}"</h4>
-                <div class="lore_graph_meta">${expected.length ? `Expected near the top: ${expected.map(escapeHtml).join(', ')}` : 'Expected: nothing above the threshold (casual chat)'}</div>
-                <ol>${wide.chunks.map(c => `<li>${escapeHtml(c.id)}${usedIds.has(c.id) ? ' <small>(above threshold, would be used)</small>' : ' <small>(below threshold)</small>'}</li>`).join('')}</ol>`);
+                <h4>${ok ? '✅' : '⚠'} ${escapeHtml(label)}</h4>
+                <div class="lore_graph_meta">Searched for its summary: "${escapeHtml(query)}"</div>
+                <ol>${wide.chunks.map(c => `<li>${sectionOf.get(c.id) === section ? '<b>' : ''}${escapeHtml(c.id)}${sectionOf.get(c.id) === section ? '</b>' : ''}${usedIds.has(c.id) ? ' <small>(above threshold, would be used)</small>' : ' <small>(below threshold)</small>'}</li>`).join('')}</ol>`);
         }
-        const allOk = rows.every(r => r.includes('✅'));
-        callGenericPopup(`<div class="lore_graph_popup"><h3>Meaning search sanity check</h3>
-            <div class="lore_graph_meta">${allOk ? 'All checks look right.' : 'Some results look off. If they seem random, the model file may have a pooling problem: try a different GGUF of the model (for example the official Qwen upload) and rebuild the index. If casual chat matches lore, raise the similarity threshold a little.'}</div>
+        let casualOk = 0;
+        for (const line of CASUAL_LINES) {
+            const used = await semanticSearch(line, settings);
+            const ok = used.chunks.length === 0;
+            if (ok) casualOk++;
+            rows.push(`
+                <h4>${ok ? '✅' : '⚠'} Casual chat: "${escapeHtml(line)}"</h4>
+                <div class="lore_graph_meta">${ok ? 'Nothing above the threshold, as expected.' : `Above the threshold: ${used.chunks.map(c => escapeHtml(c.id)).join(', ')}`}</div>`);
+        }
+        const summaryOk = found === queries.length;
+        const advice = [
+            !summaryOk ? (found >= queries.length / 2
+                ? 'Most sections found themselves. A miss or two is normal for sections whose summary is very general.'
+                : 'Many sections did not find themselves. If the rankings look random, the model file may have a pooling problem: try a different GGUF of the model (for example the official upload) and rebuild the index.') : '',
+            casualOk < CASUAL_LINES.length ? 'Casual chat matched lore: raise the similarity threshold a little.' : '',
+        ].filter(Boolean).join(' ');
+        callGenericPopup(`<div class="lore_graph_popup lore_graph_sanity"><h3>Meaning search sanity check</h3>
+            <div class="lore_graph_meta">${found} of ${queries.length} sections found their own summary in the top 5 · casual chat: ${casualOk} of ${CASUAL_LINES.length} matched nothing. ${advice || 'All checks look right.'}</div>
             ${rows.join('')}</div>`, POPUP_TYPE.TEXT, '', { wider: true, leftAlign: true, allowVerticalScrolling: true });
     } catch (error) {
         console.error('Lore Graph: sanity check failed', error);

@@ -153,7 +153,7 @@
                     <i class="fa-solid fa-layer-group"></i>
                     <span>Build / update index</span>
                 </div>
-                <div id="lore_graph_embed_check" class="menu_button menu_button_icon" title="Run the standard test searches and show what comes back">
+                <div id="lore_graph_embed_check" class="menu_button menu_button_icon" title="Searches for a few sections by their own summaries, plus casual chat, and shows what comes back. Built from whatever lore is loaded.">
                     <i class="fa-solid fa-stethoscope"></i>
                     <span>Sanity check</span>
                 </div>
@@ -162,7 +162,7 @@
 
             <hr />
             <label for="lore_graph_test_input">Test retrieval (nothing is sent to the AI)</label>
-            <textarea id="lore_graph_test_input" class="text_pole textarea_compact" rows="2" placeholder="e.g. I slid my plate across to the checkpoint clerk."></textarea>
+            <textarea id="lore_graph_test_input" class="text_pole textarea_compact" rows="2" placeholder="Type a line from your roleplay to see which lore it pulls in"></textarea>
             <div class="flex-container">
                 <div id="lore_graph_test" class="menu_button menu_button_icon">
                     <i class="fa-solid fa-flask"></i>
@@ -185,7 +185,7 @@
 
             <hr />
             <h4>Test list</h4>
-            <small class="lore_graph_hint">Saved test sentences with the sections each should pull in. Run them after adding or editing lore files to catch broken links. No AI calls.</small>
+            <small class="lore_graph_hint">Saved test sentences with the sections each should pull in. Run them after adding or editing lore files to catch broken links (running tests makes no AI calls). Tests for lore that isn't loaded right now are skipped, so one list can hold tests for several settings.</small>
             <div class="flex-container">
                 <div id="lore_graph_tests_run" class="menu_button menu_button_icon">
                     <i class="fa-solid fa-list-check"></i>
@@ -194,6 +194,10 @@
                 <div id="lore_graph_tests_open" class="menu_button menu_button_icon">
                     <i class="fa-solid fa-list"></i>
                     <span>Open test list</span>
+                </div>
+                <div id="lore_graph_tests_suggest" class="menu_button menu_button_icon" title="One AI call (extraction profile) that writes test lines for the loaded lore. You review them before anything is saved.">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i>
+                    <span>Suggest tests</span>
                 </div>
             </div>
             <div id="lore_graph_tests_summary" class="lore_graph_status"></div>

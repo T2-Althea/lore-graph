@@ -1,0 +1,29 @@
+The Marsh Wardens — Duties and Seals
+Doc ID: MW-001
+
+
+1. What the Wardens Are
+TL;DR: The Marsh Wardens patrol the fenlands and keep travellers safe from wraiths. Every warden carries a Warden's Seal as proof of office.
+
+The Marsh Wardens are an old order that patrols the fenlands between the river towns. They guide travellers, mark safe paths through the reeds, and hunt the wraiths that rise from drowned ground. A warden is known by the Warden's Seal, a disc of black ironglass worn at the throat.
+
+---
+
+2. The Warden's Seal
+TL;DR: The Warden's Seal is a disc of ironglass that proves a warden's rank. Gate keepers check it before letting anyone onto the causeway.
+
+# The Seal Itself
+Each Warden's Seal is cut from ironglass and etched with the holder's circle. Gate keepers at the causeway check the seal against their ledger before they lift the bar.
+
+# Lost Seals
+A lost seal must be reported to the Hollow Court within a month. Until then the old seal still opens every gate.
+
+✕ Not This
+A seal is not a weapon and carries no magic of its own.
+
+---
+
+3. Wraiths
+TL;DR: Wraiths are cold shapes that rise from drowned ground. They fear salt and firelight, and they never cross running water.
+
+Wraiths rise where people drowned in still water. They drift toward warmth, fear salt and firelight, and stop at the edge of running water. A wraith that hunts in a pack is being driven by something else, and wardens report that to the Hollow Court at once.

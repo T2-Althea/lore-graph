@@ -193,7 +193,7 @@ Write memories of these kinds:
 Rules:
 - One short, specific sentence per memory, in past tense for events. Use names, not "he/she".
 - Only what actually happened or was stated in the NEW messages. No guesses, no repetition of existing memories, no trivia (small talk, routine actions, descriptions that change nothing).
-- Do NOT record general world knowledge: how things work in the setting, what a creature or place is in general, rules or history explained by a character. That is already in the lore books. Record only what happened in THIS story, or story-specific facts (e.g. "Mira owns the core" is a memory; "dungeons form at ley-line convergences" is not).
+- Do NOT record general world knowledge: how things work in the setting, what a creature or place is in general, rules or history explained by a character. That is already in the lore books. Record only what happened in THIS story, or story-specific facts (e.g. "Mira owns the amulet" is a memory; "wraiths avoid salt" is not).
 - Usually 0 to 6 memories per batch. Returning none is fine.
 - "characters": who the memory is about. "witnesses": who was present to see or hear it. Whoever speaks or acts in a message always witnessed it, and so does anyone they are talking to. Someone asleep, absent, or out of earshot is not a witness. When unsure who else was present, list only the people clearly there.
 - "learned_by": if, later in these NEW messages, someone who wasn't a witness is told about it (or reads or overhears it), list them with who told them and the [#number] where it happened. Otherwise an empty array.

@@ -19,20 +19,20 @@ You will receive ONE chunk of a lore document, plus known entities from earlier 
 Return a JSON object: { "entities": [...], "relations": [...] }.
 
 ENTITIES: the setting-specific things in this chunk that a roleplayer might need to look up: organizations, roles, ranks, places, creatures, species, phenomena, materials, objects, credentials, procedures, rules, events, and in-world terms.
-- Include named things and terms the lore gives a specific in-world meaning (e.g. "Rank Plate", "deep core", "Aberrant Labyrinth", "undead", "manacite").
+- Include named things and terms the lore gives a specific in-world meaning (e.g. "Warden's Seal", "the Hollow Court", "ironglass", "wraith", "Tide Rite").
 - Do NOT include everyday words or generic descriptive phrases (e.g. "route", "vacancy", "weight", "contract budget", "dead quiet", "careless extraction") unless the lore treats them as a defined term.
 - Prefer fewer, meaningful entities: usually 3 to 10 per chunk.
-- Always include the main subject named in the section or subsection title (e.g. "Undead" for "Undead In Dungeons", "Rank Plate" for "The Rank Plate"), with defined_here true.
+- Always include the main subject named in the section or subsection title (e.g. "Wraiths" for "Wraiths In The Marsh", "Warden's Seal" for "The Warden's Seal"), with defined_here true.
 For each entity:
 - "name": the canonical name. If it is in the known entity list, use EXACTLY that name.
 - "type": one of ${ENTITY_TYPES.join(', ')}. Use Concept only if nothing else fits.
-- "aliases": other specific names this chunk uses for the same thing (e.g. "the heart" for "deep core"). Never use a general word as an alias (not "practitioner" for "breathing-and-mobility practitioner", not "glow" or "smell" for "manacite glow"): aliases are used to merge entities, so a vague alias merges unrelated things. Empty array if none.
+- "aliases": other specific names this chunk uses for the same thing (e.g. "the Court" for "the Hollow Court"). Never use a general word as an alias (not "keeper" for "lighthouse keeper", not "glow" for "ironglass glow"): aliases are used to merge entities, so a vague alias merges unrelated things. Empty array if none.
 - "description": one sentence, in your own words, saying what it is. Empty string if this chunk only mentions it in passing.
 - "defined_here": true if this chunk explains what the thing is or is mainly about it (the section or subsection title usually names such a thing); false if it is only mentioned.
 
 RELATIONS connect two entities (use the same names). Each relation must read as a TRUE sentence: "<source> <type> <target>".
 Types: part_of, located_in, requires, has_authority_over, limited_by, causes, produces, classified_as, reclassifies_to, contrasts_with, exception_to, related_to (only if nothing else fits).
-Direction examples: "deep core located_in dungeon", "manacite saturation causes disorientation", "promotion requires Merit Index", "Aberrant Labyrinth contrasts_with dungeon".
+Direction examples: "Hollow Court located_in capital", "ironglass exposure causes fever", "promotion requires Warden's Seal", "wraith contrasts_with ghost".
 "evidence" is a short paraphrase (under 25 words) of what the chunk says.
 
 The chunk may end with a "✕ Not This" guardrail: a warning about a common mistake. Capture it as relations where natural, usually contrasts_with (A is not B / do not confuse them) or exception_to (X is an exception to rule Y).
@@ -40,7 +40,7 @@ The chunk may end with a "✕ Not This" guardrail: a warning about a common mist
 Only include what THIS chunk states. Do not invent facts or bring in things from other parts of the world. Reply with the JSON object only.`;
 
 const DUPLICATE_INSTRUCTIONS = `You review an entity list from a worldbuilding knowledge graph and find entries that probably refer to the SAME thing under different names (synonyms, abbreviations, singular/plural, with/without a title or article).
-Do not pair things that are merely related (a rank and its plate, a place and its inhabitants) or that are distinct members of the same category (C-Rank vs B-Rank).
+Do not pair things that are merely related (a rank and its badge, a place and its inhabitants) or that are distinct members of the same category (Second Circle vs Third Circle).
 Return JSON: { "pairs": [ { "a": "<exact name>", "b": "<exact name>", "reason": "<short reason>" } ] }. Use names exactly as listed. Return an empty array if there are none.`;
 
 /** @type {import('./graph.js').GraphStore|null} */

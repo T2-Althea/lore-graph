@@ -442,3 +442,8 @@
     border-radius: 0;
     border-top: 2px dotted #ff79c6;
 }
+
+.lore_graph_suggestions td:first-child {
+    width: 1.5em;
+    vertical-align: top;
+}
