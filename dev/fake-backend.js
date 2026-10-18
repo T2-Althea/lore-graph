@@ -5,7 +5,8 @@
 // - POST /v1/embeddings: word-overlap vectors (hashed bag of words), so "meaning search"
 //   finds texts that share words. Good enough to exercise the code paths, not real meaning.
 // - GET /__requests: every chat request received (newest last), for e2e checks.
-//   POST /__reset clears it.
+//   POST /__reset clears it. POST /__fail { status, message } makes every chat request fail
+//   with that HTTP status until /__reset (e.g. 401 to act like a rejected API key).
 //
 // Usage: node dev/fake-backend.js [port]   (default 8124)
 
@@ -14,6 +15,7 @@ import { embed, pickAnswer } from './fake-answers.js';
 
 const PORT = Number(process.argv[2] || process.env.FAKE_PORT || 8124);
 const requests = [];
+let failWith = null;
 
 // ---------------------------------------------------------------- server
 
@@ -40,7 +42,8 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, { object: 'list', data: [{ id: 'fake-model', object: 'model' }, { id: 'fake-embed', object: 'model' }] });
     }
     if (req.method === 'GET' && url === '/__requests') return send(res, 200, requests);
-    if (req.method === 'POST' && url === '/__reset') { requests.length = 0; return send(res, 200, { ok: true }); }
+    if (req.method === 'POST' && url === '/__reset') { requests.length = 0; failWith = null; return send(res, 200, { ok: true }); }
+    if (req.method === 'POST' && url === '/__fail') { failWith = body; return send(res, 200, { ok: true }); }
 
     if (req.method === 'POST' && url === '/embeddings') {
         const inputs = Array.isArray(body.input) ? body.input : [body.input];
@@ -49,6 +52,10 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && url === '/chat/completions') {
         const messages = Array.isArray(body.messages) ? body.messages : [];
+        if (failWith) {
+            requests.push({ at: Date.now(), kind: 'failed', messages });
+            return send(res, failWith.status, { error: { message: failWith.message ?? 'Invalid API key' } });
+        }
         const scripted = pickAnswer(messages);
         requests.push({ at: Date.now(), kind: scripted ? 'background' : 'chat', messages });
         const content = scripted ?? 'The fake model nods. "Understood." (This is a scripted test reply.)';

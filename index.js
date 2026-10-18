@@ -40,6 +40,7 @@ const defaultSettings = {
     memory_enabled: false,
     memory_every: 6,
     memory_profile: '',
+    folded: {}, // panel sections the user collapsed: { sources: true, chunks: true }
 };
 
 /** Runtime state (not saved in settings). */
@@ -149,9 +150,27 @@ function describeEntry(entry) {
     return parts.join(' · ');
 }
 
+/** Collapsible panel sections; which ones are collapsed is remembered in the settings. */
+function bindFolds() {
+    const settings = getSettings();
+    const apply = (name) => {
+        const folded = !!settings.folded?.[name];
+        $(`.lore_graph_fold_body[data-fold="${name}"]`).toggle(!folded);
+        $(`.lore_graph_fold_header[data-fold="${name}"] i`).toggleClass('fa-chevron-down', !folded).toggleClass('fa-chevron-right', folded);
+    };
+    $('.lore_graph_fold_header').each((_, el) => apply(String($(el).data('fold'))));
+    $('.lore_graph_fold_header').on('click', function () {
+        const name = String($(this).data('fold'));
+        settings.folded = { ...settings.folded, [name]: !settings.folded?.[name] };
+        apply(name);
+        saveSettingsDebounced();
+    });
+}
+
 function renderSources() {
     const container = $('#lore_graph_sources').empty();
     const entries = Object.values(state.index?.docs ?? {});
+    $('.lore_graph_fold_header[data-fold="sources"] .lore_graph_fold_count').text(entries.length ? `(${entries.length} file${entries.length === 1 ? '' : 's'})` : '');
     if (!entries.length) {
         container.append('<small class="lore_graph_empty">No lore files found. Add .txt lore files to the Data Bank (magic wand menu → Open Data Bank), or use Import file…, then click Rescan.</small>');
         return;
@@ -187,6 +206,8 @@ function renderChunks() {
     const docs = state.activeUrls
         .map(url => state.index.docs[url])
         .filter(entry => entry && !entry.duplicateOf && entry.chunks.length);
+    const chunkCount = docs.reduce((sum, entry) => sum + entry.chunks.length, 0);
+    $('.lore_graph_fold_header[data-fold="chunks"] .lore_graph_fold_count').text(docs.length ? `(${chunkCount} in ${docs.length} document${docs.length === 1 ? '' : 's'})` : '');
 
     if (!docs.length) {
         container.append('<small class="lore_graph_empty">No chunks yet.</small>');
@@ -479,6 +500,10 @@ async function confirmExtraction(candidates, entities, profile, title) {
             <h3>${escapeHtml(title)}</h3>
             <div class="lore_graph_meta">Profile: <b>${escapeHtml(profile.name)}</b> · Model: <b>${escapeHtml(profile.model)}</b></div>
             <p>Documents to include (tip: run one document first to check quality):</p>
+            <div class="flex-container">
+                <div class="menu_button lore_graph_choose_all">Select all</div>
+                <div class="menu_button lore_graph_choose_none">Unselect all</div>
+            </div>
             <div class="lore_graph_doc_choices"></div>
             <p class="lore_graph_estimate"></p>
             <small class="lore_graph_hint">One AI call per chunk, run one after another. Progress is saved after every chunk, and you can stop at any time.</small>
@@ -503,6 +528,8 @@ async function confirmExtraction(candidates, entities, profile, title) {
         root.find('.lore_graph_estimate').html(`<b>${chunks.length}</b> chunks · about <b>${tokens.toLocaleString()}</b> input tokens, plus the model's replies.`);
     };
     choices.on('change', 'input', updateEstimate);
+    root.find('.lore_graph_choose_all').on('click', () => { choices.find('input').prop('checked', true); updateEstimate(); });
+    root.find('.lore_graph_choose_none').on('click', () => { choices.find('input').prop('checked', false); updateEstimate(); });
     await updateEstimate();
 
     const result = await callGenericPopup(root, POPUP_TYPE.CONFIRM, '', { okButton: 'Start extraction', cancelButton: 'Cancel', wider: true, leftAlign: true });
@@ -1411,6 +1438,7 @@ export async function init() {
 
     const html = await renderExtensionTemplateAsync(EXTENSION_FOLDER, 'settings');
     $('#extensions_settings2').append(html);
+    bindFolds();
 
     $('#lore_graph_enabled').prop('checked', settings.enabled).on('input', function () {
         settings.enabled = !!$(this).prop('checked');

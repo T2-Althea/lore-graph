@@ -11,8 +11,7 @@
             </label>
 
             <hr />
-            <h4>Lore sources</h4>
-            <small class="lore_graph_hint">Lore files from the Data Bank (global, this character, this chat) and files imported here. Disabled Data Bank files are ignored.</small>
+            <h4 class="lore_graph_fold_header" data-fold="sources" title="Show or hide the file list"><i class="fa-solid fa-chevron-down"></i> Lore sources <small class="lore_graph_fold_count"></small></h4>
             <div class="flex-container">
                 <div id="lore_graph_rescan" class="menu_button menu_button_icon" title="Re-read the Data Bank and parse new or changed files">
                     <i class="fa-solid fa-rotate"></i>
@@ -25,11 +24,16 @@
                 <input id="lore_graph_import_file" type="file" accept=".txt,text/plain" multiple hidden />
             </div>
             <div id="lore_graph_status" class="lore_graph_status"></div>
-            <div id="lore_graph_sources" class="lore_graph_sources"></div>
+            <div class="lore_graph_fold_body" data-fold="sources">
+                <small class="lore_graph_hint">Lore files from the Data Bank (global, this character, this chat) and files imported here. Disabled Data Bank files are ignored.</small>
+                <div id="lore_graph_sources" class="lore_graph_sources"></div>
+            </div>
 
             <hr />
-            <h4>Chunks</h4>
-            <div id="lore_graph_chunks" class="lore_graph_chunks"></div>
+            <h4 class="lore_graph_fold_header" data-fold="chunks" title="Show or hide the chunk list"><i class="fa-solid fa-chevron-down"></i> Chunks <small class="lore_graph_fold_count"></small></h4>
+            <div class="lore_graph_fold_body" data-fold="chunks">
+                <div id="lore_graph_chunks" class="lore_graph_chunks"></div>
+            </div>
 
             <hr />
             <h4>Graph extraction</h4>

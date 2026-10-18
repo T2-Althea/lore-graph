@@ -94,6 +94,7 @@ export async function closePopup(page) {
 }
 
 export async function extractAll(page) {
+    await page.evaluate(() => { document.querySelector('#lore_graph_extract_status').textContent = ''; });
     await page.click('#lore_graph_extract');
     await confirmPopup(page);
     await page.waitForFunction(() => /^(Finished|Paused|Stopped|Extraction stopped)/.test(document.querySelector('#lore_graph_extract_status')?.textContent ?? ''), null, { timeout: 180000 });

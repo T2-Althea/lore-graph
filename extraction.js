@@ -139,6 +139,11 @@ function describeError(error) {
     return parts.join(' ← ') || String(error);
 }
 
+/** The provider refused the API key. Retrying can't help and some providers lock the key out for repeated attempts. */
+function looksLikeAuthError(error) {
+    return /\b40[13]\b|unauthori[sz]ed|forbidden|invalid.{0,20}(credential|api.?key|token)|authentication/i.test(describeError(error));
+}
+
 function looksLikeRateLimit(error) {
     return /\b429\b|rate.?limit|too many requests|quota|usage limit/i.test(describeError(error));
 }
@@ -198,6 +203,10 @@ async function callWithRateLimitRetry(profileId, messages, options, onWait) {
             return await callModel(profileId, messages, options);
         } catch (error) {
             if (options.signal?.aborted) throw error;
+            if (looksLikeAuthError(error)) {
+                // Thrown as a RateLimitError so the whole run pauses at once instead of retrying.
+                throw new RateLimitError(`The provider rejected the API key (${describeError(error)}). Check the key in API Connections, and that the connection profile still uses it. Paused so no more requests are sent with a bad key.`);
+            }
             if (!looksLikeRateLimit(error)) throw error;
             if (attempt >= RATE_LIMIT_WAITS_SECONDS.length) {
                 throw new RateLimitError(`The provider keeps refusing requests (rate or usage limit): ${describeError(error)}`);

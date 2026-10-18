@@ -447,3 +447,26 @@
     width: 1.5em;
     vertical-align: top;
 }
+
+.lore_graph_fold_header {
+    cursor: pointer;
+    user-select: none;
+}
+
+.lore_graph_fold_header i {
+    width: 1em;
+    font-size: 0.8em;
+    opacity: 0.7;
+}
+
+.lore_graph_fold_header .lore_graph_fold_count {
+    font-weight: normal;
+    opacity: 0.7;
+}
+
+.lore_graph_choose_all,
+.lore_graph_choose_none {
+    white-space: nowrap;
+    width: fit-content;
+    flex: 0 0 auto;
+}

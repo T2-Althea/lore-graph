@@ -283,3 +283,14 @@ Oct 2026). Paths are relative to the SillyTavern root.
 - `loadJsonFile` retries a read that returns half-written JSON (seen when the panel refreshed the
   graph summary while extraction was saving the graph file).
 - Local test setup: see `dev/README.md`.
+
+## Panel and extraction tweaks (0.4.1)
+- "Lore sources" and "Chunks" headers fold their lists (counts shown in the header); Rescan/Import
+  and the status line stay visible. Folded state is saved in `settings.folded`.
+- The extraction window (both "Extract new & changed" and "Re-extract everything") has
+  Select all / Unselect all.
+- API-key errors (401/403, "Unauthorized", "Forbidden", "invalid … key/credentials") pause the run
+  at once instead of retrying. NanoGPT locks a client out with 429 after repeated invalid
+  credentials, so retrying with a bad key makes the lockout worse. Note: the browser only gets
+  the HTTP status text ("Too Many Requests"); the provider's full message is only in the
+  SillyTavern server console, so a lockout 429 still looks like an ordinary rate limit.
