@@ -9,6 +9,7 @@ const STATUS_LABELS = {
     tldr: 'TL;DR only (budget)',
     cut: 'cut (budget)',
     'below threshold': 'too weak',
+    blocked: 'blocked (never sent)',
 };
 
 /** The "Matched by meaning" part of a report (Milestone 3b). */
@@ -65,13 +66,13 @@ function ageLabel(age) {
  */
 export function showRetrievalReport(report, title, onOpenChunk, onShowMap = null) {
     const included = report.chunks.filter(c => c.status === 'full' || c.status === 'tldr');
-    const notIncluded = report.chunks.filter(c => c.status === 'cut' || c.status === 'below threshold');
+    const notIncluded = report.chunks.filter(c => c.status === 'cut' || c.status === 'below threshold' || c.status === 'blocked');
 
     const chunkRow = (c) => `
         <tr>
             <td><span class="lore_graph_badge lore_graph_chunkstatus_${c.status.replace(/\s/g, '_')}">${escapeHtml(STATUS_LABELS[c.status] ?? c.status)}</span></td>
             <td>${c.score.toFixed(2)}</td>
-            <td><span class="lore_graph_link lore_graph_report_chunk" data-chunk="${escapeHtml(c.id)}">${escapeHtml(c.id)}</span>${c.direct ? ' <small title="Mentions a matched entity directly">★</small>' : ''}
+            <td><span class="lore_graph_link lore_graph_report_chunk" data-chunk="${escapeHtml(c.id)}">${escapeHtml(c.id)}</span>${c.direct ? ' <small title="Mentions a matched entity directly">★</small>' : ''}${c.pinned ? ' <i class="fa-solid fa-thumbtack" title="Pinned: always sent"></i>' : ''}
                 <div class="lore_graph_row_sub">via ${c.reasons.slice(0, 3).map(r => `${escapeHtml(r.name)}${r.defined ? '' : ' (mention)'}`).join(', ')}${c.sharedWords?.length ? ` · shared words: ${c.sharedWords.slice(0, 5).map(escapeHtml).join(', ')}` : ''}</div></td>
             <td>${c.tokens || ''}</td>
         </tr>`;

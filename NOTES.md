@@ -315,3 +315,18 @@ Oct 2026). Paths are relative to the SillyTavern root.
   query, and don't vouch for weak meaning matches). "Capital letter, strict"
   (`capital_strict`) also treats a capital at a sentence/quote/line start as an ordinary
   word: it needs a lore term nearby to count, and is hidden from meaning search.
+
+## Snapshots, pins, health check, bug fixes (0.6.0)
+- `snapshots.js` / `snapshot-view.js`: a snapshot = chunkResults + decisions + matching, saved as
+  `lore-graph_snapshot_<id>.json`, listed in `lore-graph_snapshots.json`. Restore, clear and
+  "Re-extract everything" make an automatic snapshot first (newest 5 automatic ones kept; renaming
+  one keeps it). Export downloads the same JSON; import adds it as a snapshot (applied only on
+  Restore). "Clear results of removed files" drops results whose chunk id is in no known doc.
+- Pinned/blocked sections live in matching (`pinnedChunks`, `blockedChunks`): pinned ones are
+  sent first with every reply (within the budget), blocked ones never. Tests ignore pinned sections.
+- `health.js` (pure) / `health-view.js`: missing/failed/outdated extraction, sections bigger than
+  the budget, documents with no cross-document link, names shared by several entities,
+  placeholders, unlinked entities, empty sections, names too short to match, leftover results.
+- Fixes: a failed re-extraction of an unchanged section keeps the earlier good result (shows
+  `lastError`); empty number boxes no longer save 0 (an empty threshold meant "match everything",
+  an empty time limit meant "no limit"), and ignored values snap back on leaving the box.

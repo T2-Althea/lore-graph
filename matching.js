@@ -20,6 +20,8 @@ function normalize(data) {
         if (data.modes && typeof data.modes === 'object') matching.modes = data.modes;
         if (Array.isArray(data.safeAliases)) matching.safeAliases = data.safeAliases;
         if (Array.isArray(data.checkedNames)) matching.checkedNames = data.checkedNames;
+        if (Array.isArray(data.pinnedChunks)) matching.pinnedChunks = data.pinnedChunks;
+        if (Array.isArray(data.blockedChunks)) matching.blockedChunks = data.blockedChunks;
     }
     return matching;
 }
@@ -49,6 +51,30 @@ async function updateMatching(change) {
     change(matching);
     await saveJsonFile(MATCHING_FILE, matching);
     matchingRevision++;
+}
+
+/**
+ * Replaces all matching settings (restoring a snapshot).
+ * @param {object} data
+ */
+export async function replaceMatching(data) {
+    cached = normalize(data);
+    await saveJsonFile(MATCHING_FILE, cached);
+    matchingRevision++;
+}
+
+/**
+ * Pins a section (always sent), blocks it (never sent), or clears both.
+ * @param {string} chunkId
+ * @param {'pinned'|'blocked'|null} choice
+ */
+export async function setChunkChoice(chunkId, choice) {
+    await updateMatching(matching => {
+        matching.pinnedChunks = matching.pinnedChunks.filter(id => id !== chunkId);
+        matching.blockedChunks = matching.blockedChunks.filter(id => id !== chunkId);
+        if (choice === 'pinned') matching.pinnedChunks.push(chunkId);
+        if (choice === 'blocked') matching.blockedChunks.push(chunkId);
+    });
 }
 
 /**

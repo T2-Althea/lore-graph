@@ -385,7 +385,11 @@ export async function runExtraction({ chunks, contextChunkIds, profileId, settin
             running.delete(chunk.id);
 
             // Keep finished work even if another worker paused the run meanwhile.
-            store.chunkResults[chunk.id] = result;
+            // A failed redo of an unchanged chunk keeps the earlier good result instead of losing it.
+            const previous = store.chunkResults[chunk.id];
+            const keepPrevious = result.status === 'failed' && previous && previous.status !== 'failed' && previous.hash === chunk.hash;
+            if (keepPrevious) previous.lastError = result.error;
+            else store.chunkResults[chunk.id] = result;
             includedIds.add(chunk.id);
             if (result.status === 'failed') failed++;
             done++;

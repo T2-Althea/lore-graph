@@ -58,7 +58,8 @@ export async function runTest(test, chunks, settings) {
     }
     const messages = test.text.split(/\n+/).map(x => x.trim()).filter(Boolean);
     const report = await runRetrieval(chunks, messages, settings);
-    const injected = report.chunks.filter(c => c.status === 'full' || c.status === 'tldr').map(c => c.id);
+    // Pinned sections are sent every time, so they don't count for or against a test.
+    const injected = report.chunks.filter(c => (c.status === 'full' || c.status === 'tldr') && !c.pinned).map(c => c.id);
     const { pass, missing } = judgeTest(test, injected);
     test.last = { at: Date.now(), pass, skipped: false, needs: [], gone, missing, injected };
     return { test, report, pass, skipped: false, missing, injected };

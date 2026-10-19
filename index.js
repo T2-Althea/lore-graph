@@ -10,8 +10,12 @@ import { buildGraph, getChunkStatus } from './graph.js';
 import { decideDuplicate, estimateExtractionTokens, findDuplicates, getUsableProfile, loadGraphStore, runExtraction } from './extraction.js';
 import { showDuplicateReview, showGraphBrowser } from './graph-view.js';
 import { DEFAULT_INJECTION_SETTINGS, clearInjection, interceptGeneration, invalidateRetrievalCache, runRetrieval } from './injection.js';
-import { applyEverydayReview, findEverydayWords, loadMatching, setAliasSafe, setEntityMatchMode, setNameMatchModes } from './matching.js';
-import { DEFAULT_RETRIEVAL_SETTINGS, countNameCasing, getMatchMode, getNameModes, looksCapitalisedInLore } from './retrieval.js';
+import { applyEverydayReview, findEverydayWords, loadMatching, setAliasSafe, setChunkChoice, setEntityMatchMode, setNameMatchModes } from './matching.js';
+import { DEFAULT_RETRIEVAL_SETTINGS, buildRetrievalIndex, countNameCasing, getMatchMode, getNameModes, looksCapitalisedInLore } from './retrieval.js';
+import { createSnapshot } from './snapshots.js';
+import { showSnapshotWindow } from './snapshot-view.js';
+import { computeHealth } from './health.js';
+import { showHealthReport } from './health-view.js';
 import { matchForm } from './schema.js';
 import { showRetrievalReport } from './report-view.js';
 import { loadEmbeddingState, semanticSearch, syncEmbeddingIndex } from './embeddings.js';
@@ -54,6 +58,8 @@ const state = {
     rescanQueued: false,
     /** @type {AbortController|null} set while extraction runs */
     extraction: null,
+    /** @type {import('./retrieval.js').MatchingSettings|null} for the pinned/blocked icons */
+    matching: null,
     /** @type {object|null} what was injected before the last reply, and why */
     lastReport: null,
 };
@@ -240,6 +246,8 @@ function renderChunks() {
                 <div class="lore_graph_chunk" title="${escapeHtml(chunk.id)}">
                     <span class="lore_graph_chunk_label">${escapeHtml(label)}</span>
                     ${chunk.guardrail ? '<i class="fa-solid fa-shield-halved lore_graph_status_error" title="Has a ✕ Not This guardrail"></i>' : ''}
+                    ${state.matching?.pinnedChunks.includes(chunk.id) ? '<i class="fa-solid fa-thumbtack" title="Pinned: always sent"></i>' : ''}
+                    ${state.matching?.blockedChunks.includes(chunk.id) ? '<i class="fa-solid fa-ban lore_graph_status_error" title="Blocked: never sent"></i>' : ''}
                     <span class="lore_graph_chunk_tokens">~${chunk.tokens} t</span>
                 </div>`);
             row.on('click', () => showChunk(chunk, entry));
@@ -342,6 +350,7 @@ async function showChunk(chunk, entry) {
         const stale = result.hash !== chunk.hash ? ' <span class="lore_graph_status_warning">(text changed since)</span>' : '';
         extractionHtml = `
             <div class="lore_graph_meta">${escapeHtml(result.model ?? '')} · ${new Date(result.extractedAt).toLocaleString()}${stale}</div>
+            ${result.lastError ? `<div class="lore_graph_status_warning">The last re-extraction failed, so this earlier result was kept: ${escapeHtml(result.lastError)}</div>` : ''}
             <div class="lore_graph_popup_block"><b>Entities:</b> ${result.entities.map(e => escapeHtml(e.name) + (e.defined_here ? '' : '<small> (mention)</small>')).join(', ') || '(none)'}</div>
             <div class="lore_graph_popup_block"><b>Relations:</b><br>${result.relations.map(r => `${escapeHtml(r.source)} <span class="lore_graph_badge">${escapeHtml(r.type)}</span> ${escapeHtml(r.target)}`).join('<br>') || '(none)'}</div>`;
     }
@@ -361,10 +370,29 @@ async function showChunk(chunk, entry) {
             <div class="lore_graph_popup_block lore_graph_meta">${escapeHtml(formatChunk(chunk))}</div>
             <h4>What the graph got from this chunk</h4>
             ${extractionHtml}
+            <h4>Sending</h4>
+            <div class="lore_graph_meta">Normally a section is sent when the scene calls for it. Pin it to send it with every reply (core rules of the world), or block it to never send it (outdated lore). Pinned sections still count toward the token budget.</div>
+            <select class="text_pole lore_graph_chunk_choice">
+                <option value="">Send when relevant (normal)</option>
+                <option value="pinned">Pinned: always send</option>
+                <option value="blocked">Blocked: never send</option>
+            </select>
             <div class="menu_button menu_button_icon lore_graph_reextract_one" title="Ask the AI again for this chunk only (one request) and replace its result">
                 <i class="fa-solid fa-arrows-rotate"></i><span>Re-extract this chunk</span>
             </div>
         </div>`);
+    const choice = state.matching?.pinnedChunks.includes(chunk.id) ? 'pinned' : state.matching?.blockedChunks.includes(chunk.id) ? 'blocked' : '';
+    root.find('.lore_graph_chunk_choice').val(choice).on('change', async function () {
+        try {
+            await setChunkChoice(chunk.id, String($(this).val()) || null);
+            state.matching = await loadMatching();
+            invalidateRetrievalCache();
+            renderChunks();
+            toastr.success('Saved.', 'Lore Graph', { timeOut: 1500 });
+        } catch (error) {
+            toastr.error(String(error?.message ?? error), 'Lore Graph');
+        }
+    });
 
     const popupPromise = callGenericPopup(root, POPUP_TYPE.TEXT, '', { wider: true, leftAlign: true, allowVerticalScrolling: true });
     root.find('.lore_graph_reextract_one').on('click', async function () {
@@ -571,6 +599,15 @@ async function onExtract(mode) {
     const known = buildGraph(store, chunks.map(c => c.id)).entities;
     const toRun = await confirmExtraction(candidates, known, profile, mode === 'all' ? 'Re-extract everything' : 'Extract new & changed chunks');
     if (!toRun) return;
+    if (mode === 'all') {
+        // A full re-run replaces good results; keep a copy so it can be undone.
+        try {
+            await createSnapshot('Before "Re-extract everything"', { auto: true });
+        } catch (error) {
+            toastr.error(`Could not save a snapshot first, so nothing was started: ${error?.message ?? error}`, 'Lore Graph');
+            return;
+        }
+    }
 
     await startExtraction(toRun, profile);
 }
@@ -680,6 +717,47 @@ async function onBrowse() {
 }
 
 /** The graph for the current chat's lore, or null (with a message) if there's none. */
+/** Chunk ids of every lore file the extension knows (any scope, any chat). */
+function knownChunkIds() {
+    return Object.values(state.index?.docs ?? {}).flatMap(entry => entry.chunks.map(c => c.id));
+}
+
+/** After a restore or clear: drop caches and redraw everything that shows the graph. */
+async function onGraphReplaced() {
+    invalidateRetrievalCache();
+    try {
+        state.matching = await loadMatching({ fresh: true });
+    } catch (error) {
+        toastr.error(error.message, 'Lore Graph');
+    }
+    render();
+}
+
+function openSnapshots() {
+    return showSnapshotWindow({ isBusy: () => !!state.extraction, knownChunkIds, onChanged: onGraphReplaced });
+}
+
+async function onHealthCheck() {
+    const chunks = getCurrentChunks();
+    if (!chunks.length) {
+        toastr.info('No lore loaded for this chat.', 'Lore Graph');
+        return;
+    }
+    const store = await loadStoreOrWarn();
+    if (!store) return;
+    let matching;
+    try {
+        matching = await loadMatching();
+    } catch (error) {
+        toastr.error(error.message, 'Lore Graph');
+        return;
+    }
+    const graph = buildGraph(store, chunks.map(c => c.id));
+    const index = buildRetrievalIndex(graph, chunks, matching);
+    const health = computeHealth({ graph, chunks, chunkResults: store.chunkResults, index, knownChunkIds: new Set(knownChunkIds()), budget: getSettings().retrieval_budget });
+    showHealthReport(health, { onOpenChunk: openChunkById, onOpenSnapshots: openSnapshots });
+}
+
 async function getCurrentGraph() {
     const store = await loadStoreOrWarn();
     if (!store) return null;
@@ -1011,7 +1089,7 @@ async function onSaveAsTest() {
     }
     const tests = await getTests();
     if (!tests) return;
-    const injected = state.lastTest.report.chunks.filter(c => c.status === 'full' || c.status === 'tldr').map(c => c.id);
+    const injected = state.lastTest.report.chunks.filter(c => (c.status === 'full' || c.status === 'tldr') && !c.pinned).map(c => c.id);
     const test = await editTestPopup({ text: state.lastTest.text, nothing: injected.length === 0 }, getCurrentChunks().map(c => c.id), { title: 'Save as test', injected });
     if (!test) return;
     tests.push(test);
@@ -1278,10 +1356,18 @@ globalThis.loreGraph_generateInterceptor = async function (chat, _contextSize, _
 function bindNumber(selector, key, { min, max, integer = true }) {
     const settings = getSettings();
     $(selector).val(settings[key]).on('input', function () {
-        const value = Number($(this).val());
-        if (Number.isFinite(value) && value >= min && value <= max && (!integer || Number.isInteger(value))) {
+        const raw = String($(this).val()).trim();
+        const value = Number(raw);
+        // An empty box is "still typing", not 0 (an empty threshold would otherwise mean "match everything").
+        if (raw !== '' && Number.isFinite(value) && value >= min && value <= max && (!integer || Number.isInteger(value))) {
             settings[key] = value;
             saveSettingsDebounced();
+        }
+    }).on('change', function () {
+        // On leaving the box, show what is actually saved, so an ignored value doesn't look applied.
+        if (Number($(this).val()) !== settings[key] || String($(this).val()).trim() === '') {
+            $(this).val(settings[key]);
+            toastr.info(`Allowed range: ${min} to ${max}${integer ? ', whole numbers' : ''}. Kept ${settings[key]}.`, 'Lore Graph', { timeOut: 4000 });
         }
     });
 }
@@ -1523,27 +1609,9 @@ export async function init() {
         console.warn('Lore Graph: Connection Manager unavailable', error);
         $('#lore_graph_profile').replaceWith('<small class="lore_graph_status_error">The Connection Manager extension is disabled. Enable it to run extraction.</small>');
     }
-    $('#lore_graph_max_tokens').val(settings.extraction_max_tokens).on('input', function () {
-        const value = Number($(this).val());
-        if (Number.isFinite(value) && value >= 500) {
-            settings.extraction_max_tokens = Math.round(value);
-            saveSettingsDebounced();
-        }
-    });
-    $('#lore_graph_concurrency').val(settings.extraction_concurrency).on('input', function () {
-        const value = Number($(this).val());
-        if (Number.isInteger(value) && value >= 1 && value <= 8) {
-            settings.extraction_concurrency = value;
-            saveSettingsDebounced();
-        }
-    });
-    $('#lore_graph_timeout').val(settings.extraction_timeout_seconds).on('input', function () {
-        const value = Number($(this).val());
-        if (Number.isFinite(value) && value >= 0) {
-            settings.extraction_timeout_seconds = Math.round(value);
-            saveSettingsDebounced();
-        }
-    });
+    bindNumber('#lore_graph_max_tokens', 'extraction_max_tokens', { min: 500, max: 200000 });
+    bindNumber('#lore_graph_concurrency', 'extraction_concurrency', { min: 1, max: 8 });
+    bindNumber('#lore_graph_timeout', 'extraction_timeout_seconds', { min: 0, max: 3600 });
     $('#lore_graph_structured').prop('checked', settings.extraction_structured_output).on('input', function () {
         settings.extraction_structured_output = !!$(this).prop('checked');
         saveSettingsDebounced();
@@ -1553,6 +1621,8 @@ export async function init() {
     $('#lore_graph_stop').on('click', () => state.extraction?.abort());
     $('#lore_graph_browse').on('click', onBrowse);
     $('#lore_graph_map').on('click', openGraphMap);
+    $('#lore_graph_health').on('click', onHealthCheck);
+    $('#lore_graph_snapshots').on('click', openSnapshots);
     $('#lore_graph_dupes_find').on('click', onFindDuplicates);
     $('#lore_graph_dupes_review').on('click', onReviewDuplicates);
     bindRetrievalSettings();
@@ -1569,6 +1639,11 @@ export async function init() {
         state.index = await loadIndex();
     } catch (error) {
         console.error('Lore Graph: could not load index', error);
+    }
+    try {
+        state.matching = await loadMatching();
+    } catch (error) {
+        console.error('Lore Graph: could not load matching settings', error);
     }
     if (state.index) {
         state.activeUrls = listCurrentSources(state.index).map(x => x.url);

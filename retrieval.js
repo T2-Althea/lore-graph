@@ -56,11 +56,13 @@ export const MATCH_MODES = {
  * @property {Record<string, 'always'|'capital'|'capital_strict'|'context'|'never'>} modes keyed by an entity's name/alias match form
  * @property {string[]} safeAliases match forms of short names the user marked safe to match
  * @property {string[]} checkedNames match forms already reviewed by the everyday-word check
+ * @property {string[]} pinnedChunks chunk ids always sent (within the budget, before anything else)
+ * @property {string[]} blockedChunks chunk ids never sent
  */
 
 /** @returns {MatchingSettings} */
 export function createEmptyMatching() {
-    return { modes: {}, safeAliases: [], checkedNames: [] };
+    return { modes: {}, safeAliases: [], checkedNames: [], pinnedChunks: [], blockedChunks: [] };
 }
 
 /**
@@ -256,7 +258,12 @@ export function buildRetrievalIndex(graph, chunks, matching, { minAliasLength = 
         }
     }
 
-    return { entities, byId, adjacency, names, tooShort, hub, chunkWords, entitiesByChunk, idf, chunkById: new Map(chunks.map(c => [c.id, c])) };
+    // Sections the user pinned (always sent, in document order) or blocked (never sent).
+    const pinnedSet = new Set(matching.pinnedChunks ?? []);
+    const pinned = chunks.filter(c => pinnedSet.has(c.id)).map(c => c.id);
+    const blocked = new Set((matching.blockedChunks ?? []).filter(id => chunkIds.has(id) && !pinnedSet.has(id)));
+
+    return { entities, byId, adjacency, names, tooShort, hub, chunkWords, entitiesByChunk, idf, pinned, blocked, chunkById: new Map(chunks.map(c => [c.id, c])) };
 }
 
 /** matchForm, but a leading "the"/"a"/"an" is kept (matchForm drops it). */
@@ -494,12 +501,44 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
     }
 
     // ---- 6. Fill the token budget ----
-    const ranked = [...chunkScores].sort((a, b) => b[1].score - a[1].score);
+    // Pinned sections go first, whatever the scene; blocked ones are never sent.
+    const pinnedIds = new Set(index.pinned ?? []);
+    const blockedIds = index.blocked ?? new Set();
+    const ranked = [...chunkScores].filter(([id]) => !pinnedIds.has(id) && !blockedIds.has(id)).sort((a, b) => b[1].score - a[1].score);
     const best = ranked[0]?.[1].score ?? 0;
     const sectionsWithTldr = new Set();
     const parts = [];
     let used = 0;
     const chunks = [];
+
+    for (const id of index.pinned ?? []) {
+        const chunk = index.chunkById.get(id);
+        const entry = chunkScores.get(id);
+        const row = { id, score: entry?.score ?? 0, direct: entry?.direct ?? false, pinned: true, reasons: [{ entityId: '', name: 'pinned (always sent)', amount: 0, defined: true }, ...(entry?.reasons ?? [])], sharedWords: entry?.sharedWords ?? [], status: 'cut', tokens: 0 };
+        chunks.push(row);
+        const sectionKey = `${chunk.docId}|${chunk.sectionNumber}`;
+        const full = formatChunk(sectionsWithTldr.has(sectionKey) ? { ...chunk, tldr: '' } : chunk);
+        const fullTokens = await countTokens(full);
+        const short = formatChunk(chunk, { tldrOnly: true });
+        const shortTokens = fullTokens + used <= s.budget ? 0 : await countTokens(short);
+        if (used + fullTokens <= s.budget) {
+            parts.push(full);
+            used += fullTokens;
+            Object.assign(row, { status: 'full', tokens: fullTokens });
+        } else if (used + shortTokens <= s.budget) {
+            parts.push(short);
+            used += shortTokens;
+            Object.assign(row, { status: 'tldr', tokens: shortTokens });
+        } else {
+            continue;
+        }
+        sectionsWithTldr.add(sectionKey);
+    }
+    for (const [id, entry] of chunkScores) {
+        if (blockedIds.has(id)) {
+            chunks.push({ id, score: entry.score, direct: entry.direct, reasons: entry.reasons, sharedWords: entry.sharedWords ?? [], status: 'blocked', tokens: 0 });
+        }
+    }
 
     for (const [id, entry] of ranked) {
         const chunk = index.chunkById.get(id);

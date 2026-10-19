@@ -49,6 +49,7 @@ export function compactReport(report, chunkById) {
             status: c.status,
             tokens: c.tokens,
             direct: !!c.direct,
+            pinned: !!c.pinned,
             hash: chunkById.get(c.id)?.hash ?? null,
             reasons: c.reasons.slice(0, 2).map(r => ({ name: r.name, amount: round(r.amount), defined: !!r.defined })),
             sharedWords: (c.sharedWords ?? []).slice(0, 3),
