@@ -46,13 +46,14 @@ const MENTION_WEIGHT = 0.4;
 export const MATCH_MODES = {
     always: 'Always',
     capital: 'Capital letter only',
+    capital_strict: 'Capital letter, strict',
     context: 'Needs context',
     never: 'Never',
 };
 
 /**
  * @typedef {object} MatchingSettings what's saved in lore-graph_matching.json
- * @property {Record<string, 'always'|'capital'|'context'|'never'>} modes keyed by an entity's name/alias match form
+ * @property {Record<string, 'always'|'capital'|'capital_strict'|'context'|'never'>} modes keyed by an entity's name/alias match form
  * @property {string[]} safeAliases match forms of short names the user marked safe to match
  * @property {string[]} checkedNames match forms already reviewed by the everyday-word check
  */
@@ -67,7 +68,7 @@ export function createEmptyMatching() {
  * "deep core", a name of the same entity, still always counts.
  * @param {string} name
  * @param {MatchingSettings} matching
- * @returns {'always'|'capital'|'context'|'never'}
+ * @returns {'always'|'capital'|'capital_strict'|'context'|'never'}
  */
 export function getNameMode(name, matching) {
     return matching.modes[matchForm(name)] ?? 'always';
@@ -97,9 +98,14 @@ export function getMatchMode(entity, matching) {
     return modes.size === 1 ? [...modes][0] : 'mixed';
 }
 
-const MODE_STRENGTH = { always: 2, capital: 2, context: 1, never: 0 };
+const MODE_STRENGTH = { always: 2, capital: 2, capital_strict: 2, context: 1, never: 0 };
 
 // ---- "Capital letter only": "the Abyss" is the lore place, "the abyss" is just a deep hole ----
+// "Capital letter, strict" also treats a capital at a sentence start ("Abyss take you!") as an
+// ordinary word: it needs a lore term nearby, and meaning search doesn't see it either.
+
+/** Whether a name mode is one of the two capital-letter modes. */
+export const isCapitalMode = (mode) => mode === 'capital' || mode === 'capital_strict';
 
 /** Words before a match that make a capital letter meaningless: the start of a sentence, a line or a quote. */
 function atSentenceStart(text, index) {
@@ -138,17 +144,21 @@ function nameRegex(name) {
 /**
  * Removes lowercase uses of "Capital letter only" names from a text, so meaning search isn't
  * steered by them either ("stared into the abyss" shouldn't find the Abyss by meaning).
- * Capitalised uses stay, including at a sentence start.
+ * Capitalised uses stay, including at a sentence start (except in the strict mode).
  * @param {{ names: { name: string, mode: string }[] }} index
  * @param {string} text
  */
 export function hideLowercaseCapitalNames(index, text) {
     let out = String(text);
     for (const { name, mode } of index.names) {
-        if (mode !== 'capital') continue;
+        if (!isCapitalMode(mode)) continue;
         const re = nameRegex(name);
         if (!re) continue;
-        out = out.replace(re, (match) => match[0] !== match[0].toLowerCase() ? match : '');
+        out = out.replace(re, (match, offset, whole) => {
+            const capitalised = match[0] !== match[0].toLowerCase();
+            const keep = capitalised && (mode === 'capital' || !atSentenceStart(whole, offset));
+            return keep ? match : '';
+        });
     }
     return out;
 }
@@ -216,7 +226,7 @@ export function buildRetrievalIndex(graph, chunks, matching, { minAliasLength = 
             if (!form || seen.has(form)) continue;
             seen.add(form);
             // Short names are skipped unless marked safe; requiring a capital letter makes them specific enough.
-            if (form.replace(/\s/g, '').length < minAliasLength && !safe.has(form) && matching.modes[form] !== 'capital') {
+            if (form.replace(/\s/g, '').length < minAliasLength && !safe.has(form) && !isCapitalMode(matching.modes[form])) {
                 tooShort.push({ name, entityId: entity.id });
                 continue;
             }
@@ -312,8 +322,8 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
         for (const { form, name, entityId, mode: nameMode } of index.names) {
             if (!haystack.includes(` ${form} `)) continue;
             // Capital letter only: with a capital it counts like Always, in lowercase like Needs context.
-            const capitalised = nameMode === 'capital' ? hasCapitalisedUse(text, name) : null;
-            const mode = nameMode === 'capital' ? (capitalised ? 'always' : 'context') : nameMode;
+            const capitalised = isCapitalMode(nameMode) ? hasCapitalisedUse(text, name) : null;
+            const mode = isCapitalMode(nameMode) ? (capitalised ? 'always' : 'context') : nameMode;
             const previous = hits.get(entityId);
             const better = !previous
                 || MODE_STRENGTH[mode] > MODE_STRENGTH[previous.mode]

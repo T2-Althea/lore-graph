@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { countNameCasing, hasCapitalisedUse, looksCapitalisedInLore, retrieve, buildRetrievalIndex } from '../../retrieval.js';
+import { countNameCasing, hasCapitalisedUse, hideLowercaseCapitalNames, looksCapitalisedInLore, retrieve, buildRetrievalIndex } from '../../retrieval.js';
 import { FIXTURES, buildIndexWithFakeAi, countTokens, loadChunks } from './helpers.js';
 
 test('a capital letter counts only away from the start of a sentence', () => {
@@ -57,4 +57,15 @@ test('Capital letter only: capitalised counts, lowercase needs a lore term nearb
     const short = buildRetrievalIndex(graph, chunks, { modes: {}, safeAliases: [], checkedNames: [] });
     assert.deepEqual((await injected(short, 'We swore by the Sea.')).ids, [], 'short names are skipped unless safe or Capital letter only');
     assert.ok((await injected(plain, 'She handed me a cup of sea water.')).ids.includes('TT-001 §1 The Sea'));
+});
+
+test('meaning search only sees capitalised uses; the strict mode also hides sentence starts', () => {
+    const plain = { names: [{ name: 'the Abyss', mode: 'capital' }] };
+    const strict = { names: [{ name: 'the Abyss', mode: 'capital_strict' }] };
+    assert.equal(hideLowercaseCapitalNames(plain, 'He stared into the abyss.'), 'He stared into the .');
+    assert.equal(hideLowercaseCapitalNames(plain, 'He stared into the Abyss.'), 'He stared into the Abyss.');
+    assert.equal(hideLowercaseCapitalNames(plain, 'Abyss take you!'), 'Abyss take you!');
+    assert.equal(hideLowercaseCapitalNames(strict, 'Abyss take you!'), ' take you!');
+    assert.equal(hideLowercaseCapitalNames(strict, '"Abyss," she said.'), '"," she said.');
+    assert.equal(hideLowercaseCapitalNames(strict, 'He stared into the Abyss.'), 'He stared into the Abyss.');
 });

@@ -311,3 +311,7 @@ Oct 2026). Paths are relative to the SillyTavern root.
   counted: `countNameCasing`, `looksCapitalisedInLore`). Names already set to Needs context
   whose lore casing looks capitalised are offered too, with no AI call.
 - Reports say "written with a capital letter" / "written without a capital letter" for these names.
+- Meaning search never sees lowercase uses of capital-letter names (they're removed from the
+  query, and don't vouch for weak meaning matches). "Capital letter, strict"
+  (`capital_strict`) also treats a capital at a sentence/quote/line start as an ordinary
+  word: it needs a lore term nearby to count, and is hidden from meaning search.

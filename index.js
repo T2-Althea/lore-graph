@@ -824,7 +824,7 @@ async function onEverydayCheck() {
         await applyEverydayReview(changes, checkedForms);
         invalidateRetrievalCache();
         const count = (mode) => changes.filter(c => c.mode === mode).length;
-        const summary = `${count('context')} name(s) set to "Needs context", ${count('capital')} to "Capital letter only".`;
+        const summary = `${count('context')} name(s) set to "Needs context", ${count('capital')} to "Capital letter only", ${count('capital_strict')} to "Capital letter, strict".`;
         statusEl.text(`${summary} Change any entity in Browse graph.${failedNote}`);
         toastr.success(summary, 'Lore Graph');
     } catch (error) {
@@ -869,7 +869,7 @@ async function buildEverydayRows(suggestions, entities) {
 
 /**
  * Lets the user pick how each suggested name should match before anything is saved.
- * @returns {Promise<{ name: string, mode: 'context'|'capital' }[]|null>} changes, or null if cancelled
+ * @returns {Promise<{ name: string, mode: 'context'|'capital'|'capital_strict' }[]|null>} changes, or null if cancelled
  */
 async function reviewEverydayWords(rows) {
     const root = $(`<div class="lore_graph_popup lore_graph_everyday_review">
@@ -896,7 +896,7 @@ async function reviewEverydayWords(rows) {
                 </td>
                 <td>
                     <select class="text_pole lore_graph_everyday_mode" data-index="${i}">
-                        ${option('context', 'Needs context')}${option('capital', 'Capital letter only')}<option value="keep">Leave as is</option>
+                        ${option('context', 'Needs context')}${option('capital', 'Capital letter only')}${option('capital_strict', 'Capital letter, strict')}<option value="keep">Leave as is</option>
                     </select>
                 </td>
             </tr>`);

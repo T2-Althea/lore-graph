@@ -54,7 +54,7 @@ async function updateMatching(change) {
 /**
  * Sets how all of an entity's names may match (the graph browser's per-entity choice).
  * @param {import('./graph.js').Entity} entity
- * @param {'always'|'capital'|'context'|'never'} mode
+ * @param {'always'|'capital'|'capital_strict'|'context'|'never'} mode
  */
 export async function setEntityMatchMode(entity, mode) {
     await setNameMatchModes([entity.name, ...entity.aliases], mode);
@@ -63,7 +63,7 @@ export async function setEntityMatchMode(entity, mode) {
 /**
  * Sets how the given names may match.
  * @param {string[]} names
- * @param {'always'|'capital'|'context'|'never'} mode
+ * @param {'always'|'capital'|'capital_strict'|'context'|'never'} mode
  */
 export async function setNameMatchModes(names, mode) {
     await updateMatching(matching => {
@@ -194,7 +194,7 @@ export async function findEverydayWords(entities, profileId, settings, onProgres
 /**
  * Saves the user's review of the everyday-word suggestions. Only the reviewed names change;
  * the entity's other names keep counting as before.
- * @param {{ name: string, mode: 'context'|'capital' }[]} changes
+ * @param {{ name: string, mode: 'context'|'capital'|'capital_strict' }[]} changes
  * @param {string[]} checkedForms every name that was sent, so it isn't sent again next time
  */
 export async function applyEverydayReview(changes, checkedForms) {
