@@ -116,17 +116,41 @@ function atSentenceStart(text, index) {
  * @returns {{ capitalised: boolean, sentenceStart: boolean }[]}
  */
 export function nameUses(text, name) {
-    const words = String(name).trim().replace(/^(the|a|an)\s+/i, '').split(/[\s-]+/).filter(Boolean);
-    if (!words.length) return [];
-    const escape = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const pattern = words.map(escape).join('[\\s-]+') + "(?:'?s|es)?";
-    const re = new RegExp(`(?<![\\p{L}\\p{N}])${pattern}(?![\\p{L}\\p{N}])`, 'giu');
+    const re = nameRegex(name);
+    if (!re) return [];
     const uses = [];
     for (const m of String(text).matchAll(re)) {
         const first = m[0][0];
         uses.push({ capitalised: first !== first.toLowerCase(), sentenceStart: atSentenceStart(text, m.index) });
     }
     return uses;
+}
+
+/** A whole-word, case-insensitive pattern for a name (leading article ignored, simple plurals allowed). */
+function nameRegex(name) {
+    const words = String(name).trim().replace(/^(the|a|an)\s+/i, '').split(/[\s-]+/).filter(Boolean);
+    if (!words.length) return null;
+    const escape = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = words.map(escape).join('[\\s-]+') + "(?:'?s|es)?";
+    return new RegExp(`(?<![\\p{L}\\p{N}])${pattern}(?![\\p{L}\\p{N}])`, 'giu');
+}
+
+/**
+ * Removes lowercase uses of "Capital letter only" names from a text, so meaning search isn't
+ * steered by them either ("stared into the abyss" shouldn't find the Abyss by meaning).
+ * Capitalised uses stay, including at a sentence start.
+ * @param {{ names: { name: string, mode: string }[] }} index
+ * @param {string} text
+ */
+export function hideLowercaseCapitalNames(index, text) {
+    let out = String(text);
+    for (const { name, mode } of index.names) {
+        if (mode !== 'capital') continue;
+        const re = nameRegex(name);
+        if (!re) continue;
+        out = out.replace(re, (match) => match[0] !== match[0].toLowerCase() ? match : '');
+    }
+    return out;
 }
 
 /** True when the text writes the name with a capital letter somewhere other than a sentence start. */
@@ -316,7 +340,7 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
             const reason = hit.capitalised === false
                 ? 'written without a capital letter (set to Capital letter only), and no lore-specific term nearby'
                 : 'everyday word with no lore-specific term nearby';
-            ignored.push({ entityId: hit.entityId, name: entity.name, via: hit.via, reason });
+            ignored.push({ entityId: hit.entityId, name: entity.name, via: hit.via, reason, capitalised: hit.capitalised });
             continue;
         }
         seeds.push({ entityId: hit.entityId, name: entity.name, via: hit.via, message: hit.message, score: hit.weight, mode, capitalised: hit.capitalised });
@@ -346,7 +370,7 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
     // Likewise, without such a name, chunk matches that only just cleared the threshold
     // aren't trusted on their own ("How are you feeling?" weakly matches mana perception).
     const meaningChunkIds = new Set((meaning?.chunks ?? []).map(c => c.id));
-    const vouched = seeds.length > 0 || ignored.some(i => i.reason !== 'set to Never match'
+    const vouched = seeds.length > 0 || ignored.some(i => i.reason !== 'set to Never match' && i.capitalised !== false
         && index.byId.get(i.entityId)?.sourceChunks.some(id => meaningChunkIds.has(id)));
     const meaningTrusted = vouched || (meaning?.chunks ?? []).some(c => !c.weak);
     if (meaning && !meaningTrusted && ((meaning.chunks?.length ?? 0) || (meaning.entities?.length ?? 0))) {

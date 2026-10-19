@@ -6,7 +6,7 @@ import { getTokenCountAsync } from '../../../tokenizers.js';
 import { buildGraph } from './graph.js';
 import { loadGraphStore } from './extraction.js';
 import { loadMatching, matchingRevision } from './matching.js';
-import { buildRetrievalIndex, retrieve } from './retrieval.js';
+import { buildRetrievalIndex, hideLowercaseCapitalNames, retrieve } from './retrieval.js';
 import { DEFAULT_EMBEDDING_SETTINGS, DEFAULT_MEMORY_EMBEDDING_SETTINGS, buildQueryText, memoryVectorHash, searchMemoryVectors, semanticSearch, syncMemoryVectors } from './embeddings.js';
 import { getMemoryState } from './memory.js';
 import { selectMemories } from './memory-retrieval.js';
@@ -67,7 +67,8 @@ export async function runRetrieval(chunks, messages, settings) {
     let meaningError = null;
     if (settings.embed_enabled) {
         try {
-            const queryText = buildQueryText(scannedMessages);
+            // Lowercase uses of "Capital letter only" names are ordinary words; don't search by them.
+            const queryText = buildQueryText(scannedMessages.map(text => hideLowercaseCapitalNames(index, text)));
             if (queryText) meaning = await semanticSearch(queryText, settings);
         } catch (error) {
             meaningError = String(error?.message ?? error);
