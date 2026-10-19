@@ -76,9 +76,13 @@ export function answerExtraction(user) {
 
 const EVERYDAY = new Set(['plate', 'smell', 'weight', 'strength', 'failure', 'renewal', 'focus', 'form', 'character', 'branch', 'badge', 'core', 'clock', 'window', 'line', 'remnant']);
 
+// Everyday words that the fake AI also calls proper names when capitalised.
+const CAPITALISED = new Set(['sea', 'abyss', 'shroud']);
+
 function answerEveryday(user) {
     const names = user.split('\n').map(l => l.replace(/^[-*]\s*/, '').trim()).filter(Boolean);
-    return { everyday: names.filter(n => EVERYDAY.has(n.toLowerCase())) };
+    const everyday = names.filter(n => EVERYDAY.has(n.toLowerCase()) || CAPITALISED.has(n.toLowerCase()));
+    return { everyday, capitalised: everyday.filter(n => CAPITALISED.has(n.toLowerCase())) };
 }
 
 function answerMemory(user) {

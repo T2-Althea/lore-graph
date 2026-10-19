@@ -470,3 +470,7 @@
     width: fit-content;
     flex: 0 0 auto;
 }
+
+.lore_graph_everyday_mode {
+    min-width: 13em;
+}

@@ -45,13 +45,14 @@ const MENTION_WEIGHT = 0.4;
 
 export const MATCH_MODES = {
     always: 'Always',
+    capital: 'Capital letter only',
     context: 'Needs context',
     never: 'Never',
 };
 
 /**
  * @typedef {object} MatchingSettings what's saved in lore-graph_matching.json
- * @property {Record<string, 'always'|'context'|'never'>} modes keyed by an entity's name/alias match form
+ * @property {Record<string, 'always'|'capital'|'context'|'never'>} modes keyed by an entity's name/alias match form
  * @property {string[]} safeAliases match forms of short names the user marked safe to match
  * @property {string[]} checkedNames match forms already reviewed by the everyday-word check
  */
@@ -66,7 +67,7 @@ export function createEmptyMatching() {
  * "deep core", a name of the same entity, still always counts.
  * @param {string} name
  * @param {MatchingSettings} matching
- * @returns {'always'|'context'|'never'}
+ * @returns {'always'|'capital'|'context'|'never'}
  */
 export function getNameMode(name, matching) {
     return matching.modes[matchForm(name)] ?? 'always';
@@ -96,7 +97,66 @@ export function getMatchMode(entity, matching) {
     return modes.size === 1 ? [...modes][0] : 'mixed';
 }
 
-const MODE_STRENGTH = { always: 2, context: 1, never: 0 };
+const MODE_STRENGTH = { always: 2, capital: 2, context: 1, never: 0 };
+
+// ---- "Capital letter only": "the Abyss" is the lore place, "the abyss" is just a deep hole ----
+
+/** Words before a match that make a capital letter meaningless: the start of a sentence, a line or a quote. */
+function atSentenceStart(text, index) {
+    const before = text.slice(0, index);
+    const trimmed = before.replace(/[\s"'“‘«*_~([]+$/u, '');
+    return !trimmed || /[.!?…:;]$/.test(trimmed) || before.slice(trimmed.length).includes('\n');
+}
+
+/**
+ * Every place a name appears in a text, with how it is written.
+ * The name's leading article is ignored ("the Abyss" is looked for as "Abyss").
+ * @param {string} text
+ * @param {string} name
+ * @returns {{ capitalised: boolean, sentenceStart: boolean }[]}
+ */
+export function nameUses(text, name) {
+    const words = String(name).trim().replace(/^(the|a|an)\s+/i, '').split(/[\s-]+/).filter(Boolean);
+    if (!words.length) return [];
+    const escape = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = words.map(escape).join('[\\s-]+') + "(?:'?s|es)?";
+    const re = new RegExp(`(?<![\\p{L}\\p{N}])${pattern}(?![\\p{L}\\p{N}])`, 'giu');
+    const uses = [];
+    for (const m of String(text).matchAll(re)) {
+        const first = m[0][0];
+        uses.push({ capitalised: first !== first.toLowerCase(), sentenceStart: atSentenceStart(text, m.index) });
+    }
+    return uses;
+}
+
+/** True when the text writes the name with a capital letter somewhere other than a sentence start. */
+export function hasCapitalisedUse(text, name) {
+    return nameUses(text, name).some(u => u.capitalised && !u.sentenceStart);
+}
+
+/**
+ * How the lore itself writes a name (sentence starts don't count either way).
+ * @param {string[]} texts lore texts
+ * @param {string} name
+ * @returns {{ capitalised: number, lowercase: number }}
+ */
+export function countNameCasing(texts, name) {
+    let capitalised = 0;
+    let lowercase = 0;
+    for (const text of texts) {
+        for (const use of nameUses(text, name)) {
+            if (use.sentenceStart) continue;
+            if (use.capitalised) capitalised++;
+            else lowercase++;
+        }
+    }
+    return { capitalised, lowercase };
+}
+
+/** The lore treats a name as a proper name: written with a capital letter (almost) every time. */
+export function looksCapitalisedInLore({ capitalised, lowercase }) {
+    return capitalised >= 2 && lowercase <= capitalised * 0.15;
+}
 
 /**
  * Prepares lookup structures for retrieval. Build once per graph/matching change.
@@ -131,7 +191,8 @@ export function buildRetrievalIndex(graph, chunks, matching, { minAliasLength = 
             const form = matchForm(name);
             if (!form || seen.has(form)) continue;
             seen.add(form);
-            if (form.replace(/\s/g, '').length < minAliasLength && !safe.has(form)) {
+            // Short names are skipped unless marked safe; requiring a capital letter makes them specific enough.
+            if (form.replace(/\s/g, '').length < minAliasLength && !safe.has(form) && matching.modes[form] !== 'capital') {
                 tooShort.push({ name, entityId: entity.id });
                 continue;
             }
@@ -224,14 +285,17 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
         const age = scanned.length - 1 - i; // 0 = newest
         const weight = Math.pow(s.recencyDecay, age);
         const haystack = ` ${matchFormKeepingArticle(text)} `;
-        for (const { form, name, entityId, mode } of index.names) {
+        for (const { form, name, entityId, mode: nameMode } of index.names) {
             if (!haystack.includes(` ${form} `)) continue;
+            // Capital letter only: with a capital it counts like Always, in lowercase like Needs context.
+            const capitalised = nameMode === 'capital' ? hasCapitalisedUse(text, name) : null;
+            const mode = nameMode === 'capital' ? (capitalised ? 'always' : 'context') : nameMode;
             const previous = hits.get(entityId);
             const better = !previous
                 || MODE_STRENGTH[mode] > MODE_STRENGTH[previous.mode]
                 || (MODE_STRENGTH[mode] === MODE_STRENGTH[previous.mode] && weight > previous.weight);
             if (better) {
-                hits.set(entityId, { entityId, via: name, message: age, weight, mode });
+                hits.set(entityId, { entityId, via: name, message: age, weight, mode, capitalised });
             }
         }
     });
@@ -249,10 +313,13 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
         if (mode === 'context' && !strongIds.length) {
             // Everyday words ("plate", "smell") only count alongside a clearly lore-specific term.
             // Two everyday words can't vouch for each other: they often appear together in ordinary talk.
-            ignored.push({ entityId: hit.entityId, name: entity.name, via: hit.via, reason: 'everyday word with no lore-specific term nearby' });
+            const reason = hit.capitalised === false
+                ? 'written without a capital letter (set to Capital letter only), and no lore-specific term nearby'
+                : 'everyday word with no lore-specific term nearby';
+            ignored.push({ entityId: hit.entityId, name: entity.name, via: hit.via, reason });
             continue;
         }
-        seeds.push({ entityId: hit.entityId, name: entity.name, via: hit.via, message: hit.message, score: hit.weight, mode });
+        seeds.push({ entityId: hit.entityId, name: entity.name, via: hit.via, message: hit.message, score: hit.weight, mode, capitalised: hit.capitalised });
     }
 
     /** @type {Map<string, { score: number, path: string[] }>} */

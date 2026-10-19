@@ -83,7 +83,7 @@ export function showRetrievalReport(report, title, onOpenChunk, onShowMap = null
             <div class="lore_graph_meta">${included.length} chunk(s) injected · ${report.tokens} tokens${report.type ? ` · generation type: ${escapeHtml(report.type)}` : ''}${report.at ? ` · ${new Date(report.at).toLocaleTimeString()}` : ''}</div>
 
             <h4>Matched by name</h4>
-            ${report.seeds.length ? `<ul>${report.seeds.map(s => `<li><b>${escapeHtml(s.name)}</b>${s.via !== s.name ? ` (as "${escapeHtml(s.via)}")` : ''} · ${ageLabel(s.message)} · start score ${s.score.toFixed(2)}${s.mode === 'context' ? ' · everyday word, allowed because a lore term is nearby' : ''}</li>`).join('')}</ul>` : '<div class="lore_graph_meta">No lore names found in the scanned messages.</div>'}
+            ${report.seeds.length ? `<ul>${report.seeds.map(s => `<li><b>${escapeHtml(s.name)}</b>${s.via !== s.name ? ` (as "${escapeHtml(s.via)}")` : ''} · ${ageLabel(s.message)} · start score ${s.score.toFixed(2)}${s.capitalised === true ? ' · written with a capital letter' : ''}${s.mode === 'context' ? (s.capitalised === false ? ' · written in lowercase, allowed because a lore term is nearby' : ' · everyday word, allowed because a lore term is nearby') : ''}</li>`).join('')}</ul>` : '<div class="lore_graph_meta">No lore names found in the scanned messages.</div>'}
 
             ${renderMeaningSection(report)}
 

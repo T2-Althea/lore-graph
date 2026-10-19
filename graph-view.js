@@ -131,7 +131,7 @@ export function showGraphBrowser(graph, onOpenChunk, matching) {
                         ${modeOptions(mode)}
                     </select>
                 </label>
-                <div class="lore_graph_row_sub">Always: any mention counts. Needs context: counts only when a clearly lore-specific term is also in the recent messages (for everyday words). Never: ignored; the entity can still be reached through relationships.</div>
+                <div class="lore_graph_row_sub">Always: any mention counts. Capital letter only: counts when written with a capital letter mid-sentence ("the Abyss"); in lowercase it counts like Needs context. Needs context: counts only when a clearly lore-specific term is also in the recent messages (for everyday words). Never: ignored; the entity can still be reached through relationships.</div>
                 ${names.length > 1 ? `<details ${mode === 'mixed' ? 'open' : ''}><summary class="lore_graph_row_sub">Per name</summary>
                     ${names.map(({ name, mode: nameMode }) => `
                         <div class="lore_graph_name_mode">

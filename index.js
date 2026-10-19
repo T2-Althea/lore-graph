@@ -11,7 +11,7 @@ import { decideDuplicate, estimateExtractionTokens, findDuplicates, getUsablePro
 import { showDuplicateReview, showGraphBrowser } from './graph-view.js';
 import { DEFAULT_INJECTION_SETTINGS, clearInjection, interceptGeneration, invalidateRetrievalCache, runRetrieval } from './injection.js';
 import { applyEverydayReview, findEverydayWords, loadMatching, setAliasSafe, setEntityMatchMode, setNameMatchModes } from './matching.js';
-import { DEFAULT_RETRIEVAL_SETTINGS, getMatchMode, getNameModes } from './retrieval.js';
+import { DEFAULT_RETRIEVAL_SETTINGS, countNameCasing, getMatchMode, getNameModes, looksCapitalisedInLore } from './retrieval.js';
 import { matchForm } from './schema.js';
 import { showRetrievalReport } from './report-view.js';
 import { loadEmbeddingState, semanticSearch, syncEmbeddingIndex } from './embeddings.js';
@@ -794,9 +794,9 @@ async function onEverydayCheck() {
     }
     const confirmed = await callGenericPopup(
         `<div class="lore_graph_popup"><h3>Check for everyday words</h3>
-            <p>Some lore names are also normal words. For example "plate" means a <i>Rank Plate</i> in the lore, but "a plate of stew" has nothing to do with it. Without this check, ordinary chat can pull in lore by accident.</p>
+            <p>Some lore names are also normal words. For example "seal" can mean a <i>Warden's Seal</i> in the lore, but "a seal on a letter" has nothing to do with it, and "the Sea" can be a named place while "sea water" is not. Without this check, ordinary chat can pull in lore by accident.</p>
             <p>The AI will read your entity names (using <b>${escapeHtml(profile.name)}</b>, in a few small requests) and list the ones that are everyday words. <b>This can take a minute or two</b>; progress shows under the button.</p>
-            <p>When it's done, a list appears for you to review. Ticked names are set to <b>Needs context</b>: they only count when a clearly lore-specific word is also in the recent messages. Nothing changes until you click Apply.</p></div>`,
+            <p>When it's done, a list appears for you to review. For each name you choose <b>Needs context</b> (only counts when a clearly lore-specific word is also in the recent messages) or <b>Capital letter only</b> (for names like "the Sea" vs "the sea"; suggested when your lore writes the name with a capital letter). Nothing changes until you click Apply.</p></div>`,
         POPUP_TYPE.CONFIRM, '', { okButton: 'Start check', cancelButton: 'Cancel', wider: true, leftAlign: true });
     if (confirmed !== POPUP_RESULT.AFFIRMATIVE) return;
 
@@ -807,23 +807,26 @@ async function onEverydayCheck() {
     try {
         const { suggestions, checkedForms, failedBatches, error } = await findEverydayWords(entities, profile.id, settings,
             (done, total) => statusEl.text(`Checking names: ${done} / ${total}…`));
-        if (!checkedForms.length) {
-            statusEl.text('Every name has already been checked. New names are checked after future extractions.');
+        const rows = await buildEverydayRows(suggestions, entities);
+        if (!rows.length && !checkedForms.length) {
+            statusEl.text('Every name has already been checked, and no name set to "Needs context" looks capitalised in your lore. New names are checked after future extractions.');
             toastr.info('Every name has already been checked.', 'Lore Graph');
             return;
         }
         const failedNote = failedBatches ? ` ${failedBatches} batch(es) failed and will be retried next time (${error}).` : '';
-        statusEl.text(`Found ${suggestions.length} possible everyday word(s) among ${checkedForms.length} names. Review them in the window.${failedNote}`);
+        statusEl.text(`Found ${rows.length} name(s) to review among ${checkedForms.length} newly checked names. Review them in the window.${failedNote}`);
         toastr.info('The everyday-word list is ready to review.', 'Lore Graph');
-        const chosen = await reviewEverydayWords(suggestions);
-        if (chosen === null) {
+        const changes = await reviewEverydayWords(rows);
+        if (changes === null) {
             statusEl.text('Review cancelled. Nothing was changed; you can run the check again.');
             return;
         }
-        await applyEverydayReview(chosen, checkedForms);
+        await applyEverydayReview(changes, checkedForms);
         invalidateRetrievalCache();
-        statusEl.text(`${chosen.length} name(s) set to "Needs context". Change any entity in Browse graph.${failedNote}`);
-        toastr.success(`${chosen.length} name(s) set to "Needs context".`, 'Lore Graph');
+        const count = (mode) => changes.filter(c => c.mode === mode).length;
+        const summary = `${count('context')} name(s) set to "Needs context", ${count('capital')} to "Capital letter only".`;
+        statusEl.text(`${summary} Change any entity in Browse graph.${failedNote}`);
+        toastr.success(summary, 'Lore Graph');
     } catch (error) {
         console.error('Lore Graph: everyday-word check failed', error);
         statusEl.text(String(error?.message ?? error));
@@ -834,23 +837,74 @@ async function onEverydayCheck() {
     }
 }
 
+/** Lore text used to see how names are written (titles left out: they capitalise every word). */
+function loreTextsForCasing() {
+    return getCurrentChunks().map(c => [c.tldr, c.text, c.guardrail].filter(Boolean).join('\n'));
+}
+
 /**
- * Lets the user untick suggestions before they're applied.
- * @returns {Promise<string[]|null>} chosen names, or null if cancelled
+ * Review rows: the AI's new suggestions, plus names already set to "Needs context" that the
+ * lore writes with a capital letter (no AI needed for those). Each row gets a suggested mode.
  */
-async function reviewEverydayWords(suggestions) {
-    const root = $(`<div class="lore_graph_popup">
+async function buildEverydayRows(suggestions, entities) {
+    const texts = loreTextsForCasing();
+    const rows = suggestions.map(s => {
+        const casing = countNameCasing(texts, s.name);
+        const capital = s.capitalised || looksCapitalisedInLore(casing);
+        return { ...s, casing, existing: false, suggested: capital ? 'capital' : 'context' };
+    });
+    const matching = await loadMatching({ fresh: true });
+    const seen = new Set(rows.map(r => matchForm(r.name)));
+    for (const entity of entities) {
+        for (const { name, mode } of getNameModes(entity, matching)) {
+            const form = matchForm(name);
+            if (mode !== 'context' || seen.has(form)) continue;
+            seen.add(form);
+            const casing = countNameCasing(texts, name);
+            if (looksCapitalisedInLore(casing)) rows.push({ entity, name, capitalised: false, casing, existing: true, suggested: 'capital' });
+        }
+    }
+    return rows.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Lets the user pick how each suggested name should match before anything is saved.
+ * @returns {Promise<{ name: string, mode: 'context'|'capital' }[]|null>} changes, or null if cancelled
+ */
+async function reviewEverydayWords(rows) {
+    const root = $(`<div class="lore_graph_popup lore_graph_everyday_review">
         <h3>Everyday words</h3>
-        <div class="lore_graph_meta">Ticked names will be set to "Needs context": they only count when a clearly lore-specific word is also in the recent messages. Untick anything that should always count. Only the ticked name changes; the entity's other names keep working. You can change any name later in Browse graph.</div>
-        <div class="lore_graph_everyday_list"></div></div>`);
-    const list = root.find('.lore_graph_everyday_list');
-    if (!suggestions.length) list.append('<small class="lore_graph_empty">No everyday words suggested.</small>');
-    suggestions.forEach((s, i) => list.append(`
-        <label class="checkbox_label"><input type="checkbox" data-index="${i}" checked />
-        <span><b>${escapeHtml(s.name)}</b>${s.name !== s.entity.name ? ` <small>(another name for "${escapeHtml(s.entity.name)}")</small>` : ''} <small>${escapeHtml(s.entity.type)}</small></span></label>`));
+        <div class="lore_graph_meta"><b>Needs context</b>: the name only counts when a clearly lore-specific word is also in the recent messages.
+            <b>Capital letter only</b>: written with a capital letter in the middle of a sentence ("we sailed for the Sea") it always counts; in lowercase ("sea water") it counts like Needs context. The first word of a sentence doesn't count as a capital.
+            <b>Leave as is</b>: no change. Only the listed name changes; the entity's other names keep working. You can change any name later in Browse graph.</div>
+        <table class="lore_graph_table"><tbody></tbody></table></div>`);
+    const body = root.find('tbody');
+    if (!rows.length) body.append('<tr><td><small class="lore_graph_empty">No everyday words suggested.</small></td></tr>');
+    rows.forEach((row, i) => {
+        const { capitalised, lowercase } = row.casing;
+        const evidence = [
+            row.existing ? 'Already set to Needs context.' : '',
+            capitalised + lowercase ? `Your lore writes it with a capital letter ${capitalised} of ${capitalised + lowercase} times (sentence starts not counted).` : 'Not found in the lore text as written.',
+            row.capitalised ? 'The AI says the capitalised form names something specific.' : '',
+        ].filter(Boolean).join(' ');
+        const option = (value, label) => `<option value="${value}" ${row.suggested === value ? 'selected' : ''}>${label}</option>`;
+        body.append(`
+            <tr>
+                <td>
+                    <b>${escapeHtml(row.name)}</b>${row.name !== row.entity.name ? ` <small>(another name for "${escapeHtml(row.entity.name)}")</small>` : ''} <small>${escapeHtml(row.entity.type)}</small>
+                    <div class="lore_graph_row_sub">${escapeHtml(evidence)}</div>
+                </td>
+                <td>
+                    <select class="text_pole lore_graph_everyday_mode" data-index="${i}">
+                        ${option('context', 'Needs context')}${option('capital', 'Capital letter only')}<option value="keep">Leave as is</option>
+                    </select>
+                </td>
+            </tr>`);
+    });
     const result = await callGenericPopup(root, POPUP_TYPE.CONFIRM, '', { okButton: 'Apply', cancelButton: 'Cancel', wider: true, leftAlign: true, allowVerticalScrolling: true });
     if (result !== POPUP_RESULT.AFFIRMATIVE) return null;
-    return list.find('input:checked').map((_, el) => suggestions[Number($(el).data('index'))].name).get();
+    return root.find('.lore_graph_everyday_mode').map((_, el) => ({ name: rows[Number($(el).data('index'))].name, mode: String($(el).val()) })).get()
+        .filter(change => change.mode !== 'keep');
 }
 
 async function onTestRetrieval() {

@@ -294,3 +294,20 @@ Oct 2026). Paths are relative to the SillyTavern root.
   credentials, so retrying with a bad key makes the lockout worse. Note: the browser only gets
   the HTTP status text ("Too Many Requests"); the provider's full message is only in the
   SillyTavern server console, so a lockout 429 still looks like an ordinary rate limit.
+
+## Capital letter only (0.5.0)
+- New per-name matching mode `capital` ("Capital letter only"). Matching still finds the name
+  case-insensitively first; then `hasCapitalisedUse` looks at the original message: a capitalised
+  use that isn't at the start of a sentence, line or quote makes it count like Always; otherwise it
+  counts like Needs context (so "sea water" next to a clear lore term still counts).
+  The name's leading article is ignored ("the Abyss" is looked for as "Abyss"); plurals and
+  hyphenated multi-word names work; "Seaward" doesn't match "Sea".
+- Names set to Capital letter only skip the "under 4 letters" rule (e.g. "Sea"): the capital
+  makes them specific enough.
+- Everyday-word check: the AI also returns `capitalised` (names that are a specific lore thing
+  when capitalised). The review window has a mode dropdown per name (Needs context / Capital
+  letter only / Leave as is). Capital letter only is pre-selected when the AI says so or when the
+  lore itself writes the name capitalised mid-sentence (≥2 times, ≤15% lowercase; titles not
+  counted: `countNameCasing`, `looksCapitalisedInLore`). Names already set to Needs context
+  whose lore casing looks capitalised are offered too, with no AI call.
+- Reports say "written with a capital letter" / "written without a capital letter" for these names.
