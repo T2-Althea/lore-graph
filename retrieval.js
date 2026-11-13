@@ -22,6 +22,10 @@ export const DEFAULT_RETRIEVAL_SETTINGS = {
     definitionPullMinHub: 0.5, // skip terms found in more than 4 chunks (hub factor below 0.5)
     minRelativeScore: 0.08, // drop chunks scoring under this share of the best chunk
     aloneMax: 2,          // with no lore name in the scene, meaning search sends at most this many sections
+    inPlayFactor: 0.8,    // start score of an everyday name allowed because its topic is in play
+    stickyScore: 0.3,     // score for a section sent with the previous reply (halves each reply further back)
+    // recent: { topics: Map<entity name (lowercase), messages ago>, sticky: { id, repliesAgo }[] }
+    //   what fired and what was sent for recent replies; only set for real replies, not tests
     minAliasLength: 4,    // shorter names are ignored unless marked safe
 };
 
@@ -66,15 +70,42 @@ export function createEmptyMatching() {
     return { modes: {}, safeAliases: [], checkedNames: [], pinnedChunks: [], blockedChunks: [] };
 }
 
+// ---- Ordinary English words (lib/common-words.txt) ----
+// A one-word name that is an ordinary English word ("Calling", "Tree", "the Sea") needs a lore
+// term nearby unless the user chose otherwise; invented words ("Venari") and names of several
+// words ("World Tree") count on their own. A mode the user set always wins.
+
+/** @type {Set<string>|null} match forms of ordinary words, or null when the rule is off */
+let ordinaryWords = null;
+/** Increases whenever the rule changes, so cached retrieval indexes are rebuilt. */
+export let ordinaryRevision = 0;
+
+/**
+ * Turns the ordinary-word rule on (with the word list) or off (null).
+ * @param {Iterable<string>|null} words
+ */
+export function setOrdinaryWords(words) {
+    ordinaryWords = words ? new Set([...words].map(w => matchForm(w)).filter(Boolean)) : null;
+    ordinaryRevision++;
+}
+
+/** Whether the rule makes this name need context (one word, found in the word list). */
+export function isOrdinaryWordName(name) {
+    if (!ordinaryWords) return false;
+    const form = matchForm(name);
+    return !!form && !form.includes(' ') && ordinaryWords.has(form);
+}
+
 /**
  * Matching modes are set per name: "the heart" can be an everyday phrase while
- * "deep core", a name of the same entity, still always counts.
+ * "deep core", a name of the same entity, still always counts. Names with no mode set
+ * follow the ordinary-word rule.
  * @param {string} name
  * @param {MatchingSettings} matching
  * @returns {'always'|'capital'|'capital_strict'|'context'|'never'}
  */
 export function getNameMode(name, matching) {
-    return matching.modes[matchForm(name)] ?? 'always';
+    return matching.modes[matchForm(name)] ?? (isOrdinaryWordName(name) ? 'context' : 'always');
 }
 
 /**
@@ -231,11 +262,13 @@ export function buildRetrievalIndex(graph, chunks, matching, { minAliasLength = 
             // Short names are skipped unless marked safe; requiring a capital letter makes them specific enough.
             if (form.replace(/\s/g, '').length < minAliasLength && !safe.has(form) && !isCapitalMode(matching.modes[form])) {
                 tooShort.push({ name, entityId: entity.id });
+                // Still matchable while its own topic is in play ("the Sea" after Primordial Sea fired).
+                if (getNameMode(name, matching) !== 'never') names.push({ form: articledForm(name, form), name, entityId: entity.id, mode: 'context', shortOnly: true });
                 continue;
             }
             // "the made", "the cold": a one-word name keeps its article when matching, so it
             // doesn't fire on every "made" or "cold". Modes stay keyed by the plain form.
-            names.push({ form: articledForm(name, form), name, entityId: entity.id, mode: matching.modes[form] ?? 'always' });
+            names.push({ form: articledForm(name, form), name, entityId: entity.id, mode: getNameMode(name, matching) });
         }
     }
 
@@ -327,8 +360,9 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
         const age = scanned.length - 1 - i; // 0 = newest
         const weight = Math.pow(s.recencyDecay, age);
         const haystack = ` ${matchFormKeepingArticle(text)} `;
-        for (const { form, name, entityId, mode: nameMode } of index.names) {
+        for (const { form, name, entityId, mode: nameMode, shortOnly } of index.names) {
             if (!haystack.includes(` ${form} `)) continue;
+            if (shortOnly && !s.recent?.topics?.has(index.byId.get(entityId)?.name.toLowerCase())) continue;
             // Capital letter only: with a capital it counts like Always, in lowercase like Needs context.
             const capitalised = isCapitalMode(nameMode) ? hasCapitalisedUse(text, name) : null;
             const mode = isCapitalMode(nameMode) ? (capitalised ? 'always' : 'context') : nameMode;
@@ -353,6 +387,12 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
             continue;
         }
         if (mode === 'context' && !strongIds.length) {
+            // Topic in play: "the sea" counts if Primordial Sea itself fired for a recent reply.
+            const inPlay = s.recent?.topics?.get(entity.name.toLowerCase());
+            if (inPlay !== undefined) {
+                seeds.push({ entityId: hit.entityId, name: entity.name, via: hit.via, message: hit.message, score: hit.weight * s.inPlayFactor, mode, capitalised: hit.capitalised, inPlay });
+                continue;
+            }
             // Everyday words ("plate", "smell") only count alongside a clearly lore-specific term.
             // Two everyday words can't vouch for each other: they often appear together in ordinary talk.
             const reason = hit.capitalised === false
@@ -480,12 +520,28 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
         entry.reasons.sort((a, b) => b.amount - a.amount);
     }
 
+    // ---- 5a. Sticky lore: sections sent with the last replies stay a little longer ----
+    // Small scores, so they only make it in when the current scene names little or nothing else
+    // (minRelativeScore drops them next to strong matches). Sections that were only there
+    // because they were sticky don't count, so nothing stays forever.
+    for (const { id, repliesAgo } of s.recent?.sticky ?? []) {
+        if (!index.chunkById.has(id) || (index.blocked ?? new Set()).has(id)) continue;
+        const amount = s.stickyScore * Math.pow(0.5, Math.max(0, repliesAgo - 1));
+        let entry = chunkScores.get(id);
+        if (!entry) {
+            entry = { score: 0, direct: false, reasons: [], sharedWords: [], stickyOnly: true };
+            chunkScores.set(id, entry);
+        }
+        entry.score += amount;
+        entry.reasons.push({ entityId: '', name: `sticky: sent ${repliesAgo} repl${repliesAgo === 1 ? 'y' : 'ies'} ago`, amount, defined: true });
+    }
+
     // ---- 5b. Definitions the top chunks rely on ----
     // When a top chunk uses a specific term that another section defines, that section is likely
     // needed too ("file a field exception report" in Dungeon §16 → Guild §5 defines it).
     // Hub terms ("Guild", "dungeon") are skipped so this can't flood the budget.
     if (s.definitionPull > 0 && !meaningAlone) {
-        const top = [...chunkScores].sort((a, b) => b[1].score - a[1].score).slice(0, s.definitionPullTop);
+        const top = [...chunkScores].filter(([, entry]) => !entry.stickyOnly).sort((a, b) => b[1].score - a[1].score).slice(0, s.definitionPullTop);
         /** @type {Map<string, { amount: number, name: string, from: string }>} */
         const pulls = new Map();
         for (const [chunkId, entry] of top) {
@@ -548,7 +604,7 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
 
     for (const [id, entry] of ranked) {
         const chunk = index.chunkById.get(id);
-        const row = { id, score: entry.score, direct: entry.direct, reasons: entry.reasons, sharedWords: entry.sharedWords ?? [], status: 'cut', tokens: 0 };
+        const row = { id, score: entry.score, direct: entry.direct, sticky: !!entry.stickyOnly, reasons: entry.reasons, sharedWords: entry.sharedWords ?? [], status: 'cut', tokens: 0 };
         chunks.push(row);
         if (entry.score < best * s.minRelativeScore) {
             row.status = 'below threshold';

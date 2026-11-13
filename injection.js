@@ -6,7 +6,8 @@ import { getTokenCountAsync } from '../../../tokenizers.js';
 import { buildGraph } from './graph.js';
 import { loadGraphStore } from './extraction.js';
 import { loadMatching, matchingRevision } from './matching.js';
-import { buildRetrievalIndex, hideLowercaseCapitalNames, retrieve } from './retrieval.js';
+import { buildRetrievalIndex, hideLowercaseCapitalNames, ordinaryRevision, retrieve } from './retrieval.js';
+import { RECORD_KEY } from './inspector.js';
 import { DEFAULT_EMBEDDING_SETTINGS, DEFAULT_MEMORY_EMBEDDING_SETTINGS, buildQueryText, memoryVectorHash, searchMemoryVectors, semanticSearch, syncMemoryVectors } from './embeddings.js';
 import { getMemoryState } from './memory.js';
 import { selectMemories } from './memory-retrieval.js';
@@ -26,6 +27,9 @@ export const DEFAULT_INJECTION_SETTINGS = {
     inject_template: 'Relevant world lore for this scene:\n{{text}}',
     ...DEFAULT_EMBEDDING_SETTINGS,
     ...DEFAULT_MEMORY_EMBEDDING_SETTINGS,
+    ordinary_words_rule: true,   // one-word names that are ordinary English words need a lore term nearby
+    topics_in_play_messages: 10, // an everyday name counts if its own entity fired this many messages back (0 = off)
+    sticky_replies: 2,           // sections sent with the last N replies stay a little longer (0 = off)
     memory_inject: true,  // send the open chat's memories (only does anything once memories exist)
     memory_budget: 600,
 };
@@ -39,7 +43,7 @@ let cache = { key: '', index: null };
 async function getRetrievalIndex(chunks) {
     const store = await loadGraphStore();
     const matching = await loadMatching();
-    const key = [store.graph?.builtAt ?? 0, Object.keys(store.chunkResults).length, matchingRevision, chunks.length, chunks[0]?.id ?? '', chunks.at(-1)?.id ?? ''].join('|');
+    const key = [store.graph?.builtAt ?? 0, Object.keys(store.chunkResults).length, matchingRevision, ordinaryRevision, chunks.length, chunks[0]?.id ?? '', chunks.at(-1)?.id ?? ''].join('|');
     if (cache.key !== key || cache.store !== store) {
         const graph = buildGraph(store, chunks.map(c => c.id));
         cache = { key, store, index: buildRetrievalIndex(graph, chunks, matching) };
@@ -58,7 +62,48 @@ export function invalidateRetrievalCache() {
  * @param {string[]} messages
  * @param {object} settings extension settings
  */
-export async function runRetrieval(chunks, messages, settings) {
+/**
+ * What fired and what was sent for recent replies, from the records stored on AI messages.
+ * @param {object[]} chat SillyTavern's chat (newest last)
+ * @param {string} type generation type ("swipe" and "continue" redo the last message, so its record is skipped)
+ * @param {object} settings
+ * @returns {{ topics: Map<string, number>, sticky: { id: string, repliesAgo: number }[] }}
+ */
+export function collectRecent(chat, type, settings) {
+    const topics = new Map();
+    const sticky = [];
+    const topicWindow = Number(settings.topics_in_play_messages) || 0;
+    const stickyReplies = Number(settings.sticky_replies) || 0;
+    const last = (type === 'swipe' || type === 'continue') ? chat.length - 2 : chat.length - 1;
+    let replies = 0;
+    for (let i = last; i >= 0; i--) {
+        const ago = chat.length - 1 - i;
+        if (ago > topicWindow && replies >= stickyReplies) break;
+        const record = chat[i]?.extra?.[RECORD_KEY];
+        if (!record || chat[i].is_user) continue;
+        if (ago <= topicWindow) {
+            // Only names that fired by themselves (not ones that were themselves allowed by a topic in play).
+            for (const seed of record.seeds ?? []) {
+                if (seed.inPlay !== undefined) continue;
+                const name = String(seed.name).toLowerCase();
+                if (!topics.has(name)) topics.set(name, ago);
+            }
+        }
+        if (replies < stickyReplies) {
+            replies++;
+            const earned = (record.chunks ?? [])
+                .filter(c => (c.status === 'full' || c.status === 'tldr') && !c.pinned && !c.sticky)
+                .sort((a, b) => b.score - a.score)
+                .slice(0, 3);
+            for (const c of earned) {
+                if (!sticky.some(x => x.id === c.id)) sticky.push({ id: c.id, repliesAgo: replies });
+            }
+        }
+    }
+    return { topics, sticky };
+}
+
+export async function runRetrieval(chunks, messages, settings, recent = null) {
     const index = await getRetrievalIndex(chunks);
     const scannedMessages = messages.slice(-(settings.retrieval_messages + 1));
 
@@ -81,10 +126,12 @@ export async function runRetrieval(chunks, messages, settings) {
         hops: settings.retrieval_hops,
         budget: settings.retrieval_budget,
         aloneMax: settings.embed_alone_max,
+        recent,
     }, (text) => getTokenCountAsync(text), meaning);
     const promptText = report.text ? substituteParamsExtended(settings.inject_template || '{{text}}', { text: report.text }) : '';
     const memory = await runMemorySelection(scannedMessages, settings, [...report.seeds, ...(report.meaningSeeds ?? [])].map(s => s.name));
-    return { ...report, promptText, scannedMessages, meaningEnabled: !!settings.embed_enabled, meaningError, meaningHits: meaning, memory };
+    const topicsInPlay = recent ? [...recent.topics].map(([name, ago]) => ({ name, ago })) : [];
+    return { ...report, topicsInPlay, promptText, scannedMessages, meaningEnabled: !!settings.embed_enabled, meaningError, meaningHits: meaning, memory };
 }
 
 /** Headers for the "Story so far" block; no em dashes, so the model isn't nudged toward them. */
@@ -165,7 +212,8 @@ export async function interceptGeneration(chat, type, settings, getChunks) {
     const chunks = getChunks();
     let report;
     if (chunks.length) {
-        report = await runRetrieval(chunks, messages, settings);
+        const recent = collectRecent(SillyTavern.getContext().chat ?? [], type, settings);
+        report = await runRetrieval(chunks, messages, settings, recent);
     } else {
         // No lore loaded: memories can still be sent on their own.
         const memory = await runMemorySelection(messages, settings);

@@ -11,8 +11,9 @@ import { decideDuplicate, estimateExtractionTokens, findDuplicates, getUsablePro
 import { showDuplicateReview, showGraphBrowser } from './graph-view.js';
 import { DEFAULT_INJECTION_SETTINGS, clearInjection, interceptGeneration, invalidateRetrievalCache, runRetrieval } from './injection.js';
 import { applyEverydayReview, findEverydayWords, loadMatching, setAliasSafe, setChunkChoice, setEntityMatchMode, setNameMatchModes } from './matching.js';
-import { DEFAULT_RETRIEVAL_SETTINGS, buildRetrievalIndex, countNameCasing, getMatchMode, getNameModes, looksCapitalisedInLore } from './retrieval.js';
+import { DEFAULT_RETRIEVAL_SETTINGS, buildRetrievalIndex, countNameCasing, getMatchMode, getNameModes, isOrdinaryWordName, looksCapitalisedInLore } from './retrieval.js';
 import { createSnapshot } from './snapshots.js';
+import { applyOrdinaryWordRule } from './words.js';
 import { showSnapshotWindow } from './snapshot-view.js';
 import { computeHealth } from './health.js';
 import { showHealthReport } from './health-view.js';
@@ -737,6 +738,78 @@ function openSnapshots() {
     return showSnapshotWindow({ isBusy: () => !!state.extraction, knownChunkIds, onChanged: onGraphReplaced });
 }
 
+/**
+ * Lists names the ordinary-word rule made "needs context" that the user hasn't decided on yet,
+ * most-used first. Ticked ones keep counting alone; both choices are saved, so a name is only
+ * asked about once.
+ */
+async function onReviewOrdinaryWords() {
+    if (!getSettings().ordinary_words_rule) {
+        toastr.info('Turn on "Ordinary English words need a lore term nearby" first.', 'Lore Graph');
+        return;
+    }
+    const graph = await getCurrentGraph();
+    if (!graph) return;
+    let matching;
+    try {
+        matching = await loadMatching({ fresh: true });
+    } catch (error) {
+        toastr.error(error.message, 'Lore Graph');
+        return;
+    }
+    const activeIds = new Set(getCurrentChunks().map(c => c.id));
+    const rows = [];
+    const seen = new Set();
+    for (const entity of graph.entities) {
+        for (const name of [entity.name, ...entity.aliases]) {
+            const form = matchForm(name);
+            if (!form || seen.has(form) || matching.modes[form] || !isOrdinaryWordName(name)) continue;
+            seen.add(form);
+            rows.push({ name, entity, uses: entity.sourceChunks.filter(id => activeIds.has(id)).length });
+        }
+    }
+    if (!rows.length) {
+        toastr.info('Nothing to review: every ordinary-word name in this chat\'s lore already has a choice.', 'Lore Graph');
+        return;
+    }
+    rows.sort((a, b) => b.uses - a.uses || a.name.localeCompare(b.name));
+
+    const root = $(`
+        <div class="lore_graph_popup">
+            <h3>Review ordinary words</h3>
+            <div class="lore_graph_meta">These names are ordinary English words, so they now only count when a clear lore term is nearby (or their topic is in play). <b>Tick the ones that should count on their own</b>, such as the names of peoples or creatures central to your world. Most-used first. Both choices are saved, so you're only asked once; you can change any name later in Browse graph.</div>
+            <div class="flex-container"><div class="menu_button lore_graph_ord_all">Tick all</div><div class="menu_button lore_graph_ord_none">Untick all</div></div>
+            <table class="lore_graph_table"><thead><tr><th>Counts alone</th><th>Name</th><th>Used in</th></tr></thead><tbody></tbody></table>
+        </div>`);
+    const body = root.find('tbody');
+    rows.forEach((row, i) => body.append(`
+        <tr>
+            <td><input type="checkbox" class="lore_graph_ord_box" data-index="${i}" /></td>
+            <td><b>${escapeHtml(row.name)}</b>${row.name !== row.entity.name ? ` <small>(another name for "${escapeHtml(row.entity.name)}")</small>` : ''} <small>${escapeHtml(row.entity.type)}</small></td>
+            <td>${row.uses} section(s)</td>
+        </tr>`));
+    root.find('.lore_graph_ord_all').on('click', () => root.find('.lore_graph_ord_box').prop('checked', true));
+    root.find('.lore_graph_ord_none').on('click', () => root.find('.lore_graph_ord_box').prop('checked', false));
+
+    const result = await callGenericPopup(root, POPUP_TYPE.CONFIRM, '', { okButton: 'Save', cancelButton: 'Cancel', wider: true, leftAlign: true, allowVerticalScrolling: true });
+    if (result !== POPUP_RESULT.AFFIRMATIVE) return;
+    const alone = [];
+    const context = [];
+    root.find('.lore_graph_ord_box').each(function () {
+        const row = rows[Number($(this).data('index'))];
+        ($(this).prop('checked') ? alone : context).push(row.name);
+    });
+    try {
+        if (alone.length) await setNameMatchModes(alone, 'always');
+        if (context.length) await setNameMatchModes(context, 'context');
+        state.matching = await loadMatching();
+        invalidateRetrievalCache();
+        toastr.success(`${alone.length} name(s) count on their own, ${context.length} need a lore term nearby.`, 'Lore Graph');
+    } catch (error) {
+        toastr.error(String(error?.message ?? error), 'Lore Graph');
+    }
+}
+
 async function onHealthCheck() {
     const chunks = getCurrentChunks();
     if (!chunks.length) {
@@ -1377,6 +1450,15 @@ function bindRetrievalSettings() {
     bindNumber('#lore_graph_ret_messages', 'retrieval_messages', { min: 0, max: 50 });
     bindNumber('#lore_graph_ret_hops', 'retrieval_hops', { min: 0, max: 4 });
     bindNumber('#lore_graph_ret_budget', 'retrieval_budget', { min: 100, max: 20000 });
+    bindNumber('#lore_graph_topics', 'topics_in_play_messages', { min: 0, max: 100 });
+    bindNumber('#lore_graph_sticky', 'sticky_replies', { min: 0, max: 10 });
+    $('#lore_graph_ordinary').prop('checked', !!settings.ordinary_words_rule).on('input', async function () {
+        settings.ordinary_words_rule = $(this).prop('checked');
+        saveSettingsDebounced();
+        const on = await applyOrdinaryWordRule(settings.ordinary_words_rule);
+        $(this).prop('checked', on);
+        invalidateRetrievalCache();
+    });
     bindNumber('#lore_graph_depth', 'inject_depth', { min: 0, max: 9999 });
 
     // Changing where the lore goes clears the old placement so it can't linger in both places.
@@ -1624,6 +1706,7 @@ export async function init() {
     $('#lore_graph_browse').on('click', onBrowse);
     $('#lore_graph_map').on('click', openGraphMap);
     $('#lore_graph_health').on('click', onHealthCheck);
+    $('#lore_graph_ordinary_review').on('click', onReviewOrdinaryWords);
     $('#lore_graph_snapshots').on('click', openSnapshots);
     $('#lore_graph_dupes_find').on('click', onFindDuplicates);
     $('#lore_graph_dupes_review').on('click', onReviewDuplicates);
@@ -1647,6 +1730,7 @@ export async function init() {
     } catch (error) {
         console.error('Lore Graph: could not load matching settings', error);
     }
+    await applyOrdinaryWordRule(!!settings.ordinary_words_rule);
     if (state.index) {
         state.activeUrls = listCurrentSources(state.index).map(x => x.url);
         render();

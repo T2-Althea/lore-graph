@@ -338,3 +338,18 @@ Oct 2026). Paths are relative to the SillyTavern root.
 - Now, when no lore name counts, meaning search alone sends at most `embed_alone_max` (2)
   sections scoring at least `embed_alone_threshold` (0.60), with no entity seeding, link
   expansion or definition pull. Ignored everyday names no longer vouch for meaning hits.
+
+## Ordinary-word rule, topics in play, sticky lore (0.7.0)
+- `lib/common-words.txt`: 12dicts "2of12inf" (81,883 words, public domain + AGID notice in
+  `lib/common-words-NOTICE.txt`), loaded by `words.js`. With `ordinary_words_rule` on, a one-word
+  name (article dropped) found in the list defaults to Needs context; multi-word and invented
+  names default to Always. Any mode in matching.modes wins, so "Always" is now saved explicitly.
+  "Review ordinary words" lists undecided ones by section count; both choices are saved.
+- Topics in play (`topics_in_play_messages`, 10): `collectRecent` reads the records on recent AI
+  messages; entities that fired by name (not via a topic) within the window let their everyday
+  names count (`seed.inPlay`, score x0.8). Names under 4 letters stay in the index as `shortOnly`
+  and only match while their topic is in play. Swipe/continue skip the record being redone.
+- Sticky lore (`sticky_replies`, 2): the top 3 earned sections of each of the last N replies get
+  0.3, halving per reply back. Sticky-only sections are flagged (`sticky`) so they're never
+  carried forward again, can't pull definitions, and drop out next to strong matches.
+- Only real replies get `recent`; tests and Test retrieval are unaffected.

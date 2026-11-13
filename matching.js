@@ -96,8 +96,8 @@ export async function setNameMatchModes(names, mode) {
         for (const name of names) {
             const form = matchForm(name);
             if (!form) continue;
-            if (mode === 'always') delete matching.modes[form];
-            else matching.modes[form] = mode;
+            // Always is saved too: with the ordinary-word rule, "no choice" can mean Needs context.
+            matching.modes[form] = mode;
         }
     });
 }

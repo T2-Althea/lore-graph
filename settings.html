@@ -98,7 +98,15 @@
                     <i class="fa-solid fa-spell-check"></i>
                     <span>Check for everyday words</span>
                 </div>
+                <div id="lore_graph_ordinary_review" class="menu_button menu_button_icon" title="Names that are ordinary English words and now need a lore term nearby. Tick the ones that should count on their own (like Dragon or Elves). No AI calls.">
+                    <i class="fa-solid fa-book"></i>
+                    <span>Review ordinary words</span>
+                </div>
             </div>
+            <label class="checkbox_label" for="lore_graph_ordinary" title="A one-word name that is an ordinary English word (Calling, Tree, the Sea) only counts next to a clear lore term. Invented words (Venari) and names of several words (World Tree) count on their own. Anything you set yourself wins.">
+                <input id="lore_graph_ordinary" type="checkbox" />
+                <span>Ordinary English words need a lore term nearby</span>
+            </label>
             <div class="flex-container">
                 <div id="lore_graph_health" class="menu_button menu_button_icon" title="Finds the spots most likely to cause bad retrieval: documents nothing links to, names two entities share, failed or missing extraction, and more. No AI calls.">
                     <i class="fa-solid fa-stethoscope"></i>
@@ -122,6 +130,10 @@
                 <input id="lore_graph_ret_hops" class="text_pole" type="number" min="0" max="4" step="1" />
                 <label for="lore_graph_ret_budget">Token budget</label>
                 <input id="lore_graph_ret_budget" class="text_pole" type="number" min="100" max="20000" step="50" />
+                <label for="lore_graph_topics" title="An everyday name (the Sea) also counts when its own entity (Primordial Sea) fired within this many messages. 0 = off.">Topics stay in play for (messages)</label>
+                <input id="lore_graph_topics" class="text_pole" type="number" min="0" max="100" step="1" />
+                <label for="lore_graph_sticky" title="Sections sent with the last replies get a small boost, so lore doesn't flicker in and out of a scene. It fades on its own. 0 = off.">Sticky lore (replies)</label>
+                <input id="lore_graph_sticky" class="text_pole" type="number" min="0" max="10" step="1" />
             </div>
             <label>Injection position</label>
             <div class="radio_group">

@@ -76,7 +76,7 @@ export function showRetrievalReport(report, title, onOpenChunk, onShowMap = null
         <tr>
             <td><span class="lore_graph_badge lore_graph_chunkstatus_${c.status.replace(/\s/g, '_')}">${escapeHtml(STATUS_LABELS[c.status] ?? c.status)}</span></td>
             <td>${c.score.toFixed(2)}</td>
-            <td><span class="lore_graph_link lore_graph_report_chunk" data-chunk="${escapeHtml(c.id)}">${escapeHtml(c.id)}</span>${c.direct ? ' <small title="Mentions a matched entity directly">★</small>' : ''}${c.pinned ? ' <i class="fa-solid fa-thumbtack" title="Pinned: always sent"></i>' : ''}
+            <td><span class="lore_graph_link lore_graph_report_chunk" data-chunk="${escapeHtml(c.id)}">${escapeHtml(c.id)}</span>${c.direct ? ' <small title="Mentions a matched entity directly">★</small>' : ''}${c.pinned ? ' <i class="fa-solid fa-thumbtack" title="Pinned: always sent"></i>' : ''}${c.sticky ? ' <small title="Only here because it was sent with a recent reply">(sticky)</small>' : ''}
                 <div class="lore_graph_row_sub">via ${c.reasons.slice(0, 3).map(r => `${escapeHtml(r.name)}${r.defined ? '' : ' (mention)'}`).join(', ')}${c.sharedWords?.length ? ` · shared words: ${c.sharedWords.slice(0, 5).map(escapeHtml).join(', ')}` : ''}</div></td>
             <td>${c.tokens || ''}</td>
         </tr>`;
@@ -88,8 +88,9 @@ export function showRetrievalReport(report, title, onOpenChunk, onShowMap = null
             <div class="lore_graph_meta">${included.length} chunk(s) injected · ${report.tokens} tokens${report.type ? ` · generation type: ${escapeHtml(report.type)}` : ''}${report.at ? ` · ${new Date(report.at).toLocaleTimeString()}` : ''}</div>
 
             <h4>Matched by name</h4>
-            ${report.seeds.length ? `<ul>${report.seeds.map(s => `<li><b>${escapeHtml(s.name)}</b>${s.via !== s.name ? ` (as "${escapeHtml(s.via)}")` : ''} · ${ageLabel(s.message)} · start score ${s.score.toFixed(2)}${s.capitalised === true ? ' · written with a capital letter' : ''}${s.mode === 'context' ? (s.capitalised === false ? ' · written in lowercase, allowed because a lore term is nearby' : ' · everyday word, allowed because a lore term is nearby') : ''}</li>`).join('')}</ul>` : '<div class="lore_graph_meta">No lore names found in the scanned messages.</div>'}
+            ${report.seeds.length ? `<ul>${report.seeds.map(s => `<li><b>${escapeHtml(s.name)}</b>${s.via !== s.name ? ` (as "${escapeHtml(s.via)}")` : ''} · ${ageLabel(s.message)} · start score ${s.score.toFixed(2)}${s.capitalised === true ? ' · written with a capital letter' : ''}${s.inPlay !== undefined ? ` · everyday word, allowed because its topic is in play (fired ${s.inPlay} message${s.inPlay === 1 ? '' : 's'} ago)` : s.mode === 'context' ? (s.capitalised === false ? ' · written in lowercase, allowed because a lore term is nearby' : ' · everyday word, allowed because a lore term is nearby') : ''}</li>`).join('')}</ul>` : '<div class="lore_graph_meta">No lore names found in the scanned messages.</div>'}
 
+            ${report.topicsInPlay?.length ? `<div class="lore_graph_meta">Topics in play (fired recently, so their everyday names count too): ${report.topicsInPlay.slice(0, 12).map(t => `${escapeHtml(t.name)} <small>(${t.ago} ago)</small>`).join(', ')}</div>` : ''}
             ${renderMeaningSection(report)}
 
             ${report.ignored.length ? `<h4>Ignored</h4><ul>${report.ignored.map(i => `<li>${escapeHtml(i.name)}${i.via !== i.name ? ` (as "${escapeHtml(i.via)}")` : ''}: ${escapeHtml(i.reason)}</li>`).join('')}</ul>` : ''}

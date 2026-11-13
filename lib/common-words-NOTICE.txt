@@ -1,0 +1,21 @@
+common-words.txt is the "2of12inf" list from 12dicts 6.0.2 by Alan Beale
+(http://wordlist.aspell.net/12dicts/), lowercased with its marker symbols removed.
+Lore Graph uses it only to tell ordinary English words ("tree", "calling") from invented
+lore names ("Venari", "manacite").
+
+Alan Beale releases the 12dicts lists to the public domain and asks for acknowledgment.
+2of12inf depends on AGID, which carries this notice:
+
+  Copyright 2000 by Kevin Atkinson
+
+  Permission to use, copy, modify, distribute and sell this database,
+  the associated scripts, the output created form the scripts and its
+  documentation for any purpose is hereby granted without fee,
+  provided that the above copyright notice appears in all copies and
+  that both that copyright notice and this permission notice appear in
+  supporting documentation. Kevin Atkinson makes no representations
+  about the suitability of this array for any purpose. It is provided
+  "as is" without express or implied warranty.
+
+  The part-of-speech database used is created from the Moby
+  part-of-speech database, which is in the public domain.
