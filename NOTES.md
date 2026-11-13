@@ -377,3 +377,13 @@ Oct 2026). Paths are relative to the SillyTavern root.
   space clears it. New style rules sit after the edge rules so they win.
 - Placeholders: Hide (default) / Show / Only. Dots whose every link goes to a hidden hub get a
   dotted ring, and the side panel lists those hidden links.
+
+## 3D map (0.9.0)
+- `lib/3d-force-graph.min.js`: 3d-force-graph v1.80.1 (MIT, Vasco Asturiano; bundles three.js),
+  license in `lib/3d-force-graph-LICENSE.txt`. Loaded only when the 3D box is ticked.
+- `graph-map-3d.js` draws whatever `visibleIds()` picks (all three modes, same filters). Colour by
+  type or document; "Group by document" adds a custom d3 force pulling each document's dots to
+  its own point on a sphere (not in "Around one thing"). Hover = name tooltip; click = camera
+  flies to the dot, its links light up with arrows/particles, side panel shows details; empty
+  space clears. Fits the view once the simulation settles (onEngineStop) and once early.
+  Destroyed on leaving 3D, redraws and popup close (WebGL contexts are limited).

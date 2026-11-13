@@ -544,3 +544,21 @@
 .lore_graph_popout_holder #lore_graph_popout {
     display: none !important;
 }
+
+/* ---- 3D map (0.9.0) ---- */
+.lore_graph_map_canvas3d {
+    flex: 3;
+    min-width: 0;
+    position: relative;
+    overflow: hidden;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 6px;
+}
+.lore_graph_3d_tip {
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.75);
+    color: #fff;
+    font-size: 13px;
+    line-height: 1.3;
+}

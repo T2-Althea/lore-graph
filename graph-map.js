@@ -4,6 +4,7 @@
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 import { escapeHtml } from '../../../utils.js';
 import { ENTITY_TYPES } from './schema.js';
+import { canDraw3D, documentColors, draw3D } from './graph-map-3d.js';
 
 const LIBRARY_URL = '/scripts/extensions/third-party/lore-graph/lib/cytoscape.min.js';
 
@@ -140,6 +141,8 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story
         placeholders: 'hide', // hide | show | only
         hideHubs: true,
         group: true,
+        threeD: false,
+        colorBy: 'type', // 3D only: type | document
         showStory: true,
     };
 
@@ -165,10 +168,15 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story
                 <label class="checkbox_label" title="Hubs are very common things (in more than ${HUB_CHUNKS} sections) that connect to almost everything. Hiding them keeps the map readable. Click a dot to see any links that were hidden."><input type="checkbox" class="lore_graph_map_hubs" checked /> <span>Hide hubs</span></label>
                 <label class="checkbox_label" title="Whole graph: put each document's things in its own box"><input type="checkbox" class="lore_graph_map_group" checked /> <span>Group by document</span></label>
                 ${story?.entities.length ? '<label class="checkbox_label"><input type="checkbox" class="lore_graph_map_story" checked /> <span>Story (this chat)</span></label>' : ''}
+                <label class="checkbox_label" title="${canDraw3D() ? 'Show the map in 3D. Drag to turn it, scroll to zoom, right-drag to move. Hover a dot for its name; click it to fly there.' : 'Your browser can\'t draw 3D (WebGL is off or unavailable).'}"><input type="checkbox" class="lore_graph_map_3d" ${canDraw3D() ? '' : 'disabled'} /> <span>3D</span></label>
+                <select class="text_pole lore_graph_map_color" title="3D: colour the dots by what kind of thing they are, or by which document they come from" style="display: none;">
+                    <option value="type">Colour by type</option><option value="document">Colour by document</option>
+                </select>
                 <div class="menu_button lore_graph_map_fit" title="Fit to screen"><i class="fa-solid fa-expand"></i></div>
             </div>
             <div class="lore_graph_map_body">
                 <div class="lore_graph_map_canvas"></div>
+                <div class="lore_graph_map_canvas3d" style="display: none;"></div>
                 <div class="lore_graph_map_side"><small class="lore_graph_empty">Click a dot to spotlight it and see details. Click empty space to undo. Scroll to zoom: more names appear as you zoom in.</small></div>
             </div>
             <div class="lore_graph_map_legend"></div>
@@ -282,8 +290,77 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story
     const textColor = themeColor('--SmartThemeBodyColor', '#dddddd');
     const backgroundColor = themeColor('--SmartThemeBlurTintColor', '#222222');
 
+    let three = null;
+    let threeToken = 0;
+
+    /** The 3D view of the same dots and lines the 2D map would show. */
+    async function drawThree(ids) {
+        const token = ++threeToken;
+        three?.destroy();
+        three = null;
+        root.find('.lore_graph_map_canvas').hide();
+        const box = root.find('.lore_graph_map_canvas3d').show()[0];
+        const docs = [...new Set([...ids].map(id => homeDoc(byId.get(id))).filter(Boolean))].sort();
+        const docColor = documentColors(docs);
+        const nodes = [...ids].map(id => {
+            const e = byId.get(id);
+            const doc = homeDoc(e);
+            return {
+                id, name: e.name, color: TYPE_COLORS[e.type] ?? TYPE_COLORS.Concept, docColor: e.story ? TYPE_COLORS.Story : (docColor.get(doc) ?? TYPE_COLORS.Concept),
+                doc: doc ? shortDocLabel(doc) : '', size: Math.min(e.sourceChunks.length, 12), placeholder: !!e.placeholder, story: !!e.story,
+            };
+        });
+        const links = graph.edges.filter(e => ids.has(e.source) && ids.has(e.target)).map(e => ({
+            source: e.source, target: e.target, type: e.type, guardrail: GUARDRAIL_TYPES.has(e.type),
+            crossdoc: homeDoc(byId.get(e.source)) !== homeDoc(byId.get(e.target)),
+            path: !!(highlight && view.mode === 'highlight' && (highlight.edges.has(`${e.source}|${e.target}`) || highlight.edges.has(`${e.target}|${e.source}`))),
+        }));
+        root.find('.lore_graph_map_side').html('<small class="lore_graph_empty">Building the 3D map…</small>');
+        let drawn;
+        try {
+            drawn = await draw3D(box, {
+                nodes, links, colorBy: view.colorBy, cluster: view.group && view.mode !== 'around',
+                background: backgroundColor, escape: escapeHtml,
+                onPick: (id) => showEntity(id),
+                onClear: () => root.find('.lore_graph_map_side').html(threeHint(ids.size, links.length)),
+            });
+        } catch (error) {
+            toastr.error(String(error?.message ?? error), 'Lore Graph');
+            view.threeD = false;
+            root.find('.lore_graph_map_3d').prop('checked', false);
+            root.find('.lore_graph_map_color').hide();
+            draw();
+            return;
+        }
+        if (token !== threeToken || !view.threeD) {
+            drawn.destroy();
+            return;
+        }
+        three = drawn;
+        root.find('.lore_graph_map_side').html(threeHint(ids.size, links.length));
+        if (view.mode === 'around' && view.focus) {
+            three.highlight(view.focus);
+            showEntity(view.focus);
+        }
+    }
+
+    const threeHint = (dots, lines) => `<small class="lore_graph_empty">${dots} entities, ${lines} relationships in 3D. Drag to turn, scroll to zoom, right-drag to move. Hover a dot for its name; click it to fly there and see details. Click empty space to undo.</small>`;
+
+    /** Back to the flat map. */
+    function leaveThree() {
+        threeToken++;
+        three?.destroy();
+        three = null;
+        root.find('.lore_graph_map_canvas3d').hide();
+        root.find('.lore_graph_map_canvas').show();
+    }
+
     function draw() {
         const ids = visibleIds();
+        if (view.threeD) {
+            drawThree(new Set([...ids].slice(0, MAX_WHOLE_NODES)));
+            return;
+        }
         if (view.mode === 'whole' && ids.size > MAX_WHOLE_NODES) {
             toastr.info(`Showing the first ${MAX_WHOLE_NODES} of ${ids.size} entities. Use the filters to narrow it down.`, 'Lore Graph');
         }
@@ -430,7 +507,24 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story
         if (match) focusOn(match.id);
         else if (name) toastr.info('No entity with that name. Pick one from the suggestions.', 'Lore Graph');
     });
-    root.on('click', '.lore_graph_map_fit', () => fitView());
+    root.on('click', '.lore_graph_map_fit', () => (view.threeD ? three?.fit() : fitView()));
+    const typeLegend = root.find('.lore_graph_map_legend').html();
+    /** The colour key matches what the dots are coloured by. */
+    const updateLegend = () => root.find('.lore_graph_map_legend').html(view.threeD && view.colorBy === 'document'
+        ? '<span class="lore_graph_map_key">Colours show which document each dot comes from. Hover a dot to see its document.</span>'
+        : typeLegend);
+    root.on('change', '.lore_graph_map_3d', function () {
+        view.threeD = $(this).prop('checked');
+        root.find('.lore_graph_map_color').toggle(view.threeD);
+        updateLegend();
+        if (!view.threeD) leaveThree();
+        draw();
+    });
+    root.on('change', '.lore_graph_map_color', function () {
+        view.colorBy = String($(this).val());
+        three?.setColorBy(view.colorBy);
+        updateLegend();
+    });
     root.on('click', '.lore_graph_map_center', function () { focusOn(String($(this).data('id'))); });
     root.on('click', '.lore_graph_map_entity', function () { focusOn(String($(this).data('id'))); });
     root.on('click', '.lore_graph_map_chunk', function () { onOpenChunk(String($(this).data('chunk'))); });
@@ -528,6 +622,6 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story
     return callGenericPopup(root, POPUP_TYPE.TEXT, '', {
         large: true, leftAlign: true, okButton: 'Close',
         onOpen: () => setTimeout(init, 50),
-        onClose: () => { cy?.destroy(); cy = null; },
+        onClose: () => { threeToken++; three?.destroy(); three = null; cy?.destroy(); cy = null; },
     });
 }
