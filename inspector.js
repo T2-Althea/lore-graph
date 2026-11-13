@@ -33,6 +33,7 @@ export function compactReport(report, chunkById) {
         tokens: report.tokens,
         seeds: report.seeds.map(s => ({ name: s.name, via: s.via, message: s.message, score: round(s.score), mode: s.mode, ...(s.inPlay !== undefined ? { inPlay: s.inPlay } : {}) })),
         topicsInPlay: report.topicsInPlay ?? [],
+        triggered: report.triggered ?? [],
         meaningEnabled: !!report.meaningEnabled,
         meaningError: report.meaningError ?? null,
         meaningHits: report.meaningHits ? { chunks: report.meaningHits.chunks.map(c => ({ id: c.id, rank: c.rank, weak: !!c.weak })) } : null,

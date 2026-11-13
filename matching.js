@@ -22,6 +22,8 @@ function normalize(data) {
         if (Array.isArray(data.checkedNames)) matching.checkedNames = data.checkedNames;
         if (Array.isArray(data.pinnedChunks)) matching.pinnedChunks = data.pinnedChunks;
         if (Array.isArray(data.blockedChunks)) matching.blockedChunks = data.blockedChunks;
+        if (Array.isArray(data.namedOnlyChunks)) matching.namedOnlyChunks = data.namedOnlyChunks;
+        if (data.chunkTriggers && typeof data.chunkTriggers === 'object' && !Array.isArray(data.chunkTriggers)) matching.chunkTriggers = data.chunkTriggers;
     }
     return matching;
 }
@@ -63,17 +65,49 @@ export async function replaceMatching(data) {
     matchingRevision++;
 }
 
+/** The sending choice saved for a section: pinned, blocked, named (only when named) or '' (normal). */
+export function getChunkChoice(matching, chunkId) {
+    if (matching?.pinnedChunks.includes(chunkId)) return 'pinned';
+    if (matching?.blockedChunks.includes(chunkId)) return 'blocked';
+    if (matching?.namedOnlyChunks.includes(chunkId)) return 'named';
+    return '';
+}
+
 /**
- * Pins a section (always sent), blocks it (never sent), or clears both.
- * @param {string} chunkId
- * @param {'pinned'|'blocked'|null} choice
+ * Sets how sections are sent: pinned (always), blocked (never), named (never by meaning search
+ * alone), or null (normal).
+ * @param {string|string[]} chunkIds
+ * @param {'pinned'|'blocked'|'named'|null} choice
  */
-export async function setChunkChoice(chunkId, choice) {
+export async function setChunkChoice(chunkIds, choice) {
+    const ids = new Set([chunkIds].flat());
     await updateMatching(matching => {
-        matching.pinnedChunks = matching.pinnedChunks.filter(id => id !== chunkId);
-        matching.blockedChunks = matching.blockedChunks.filter(id => id !== chunkId);
-        if (choice === 'pinned') matching.pinnedChunks.push(chunkId);
-        if (choice === 'blocked') matching.blockedChunks.push(chunkId);
+        matching.pinnedChunks = matching.pinnedChunks.filter(id => !ids.has(id));
+        matching.blockedChunks = matching.blockedChunks.filter(id => !ids.has(id));
+        matching.namedOnlyChunks = matching.namedOnlyChunks.filter(id => !ids.has(id));
+        const list = { pinned: matching.pinnedChunks, blocked: matching.blockedChunks, named: matching.namedOnlyChunks }[choice];
+        if (list) list.push(...ids);
+    });
+}
+
+/**
+ * Splits what the user typed into trigger phrases: one per line or comma; "a + b" means both.
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function parseTriggerText(text) {
+    return [...new Set(String(text ?? '').split(/[\n,]+/).map(p => p.split('+').map(x => x.trim()).filter(Boolean).join(' + ')).filter(Boolean))];
+}
+
+/**
+ * Saves a section's trigger phrases (empty list removes them).
+ * @param {string} chunkId
+ * @param {string[]} phrases
+ */
+export async function setChunkTriggers(chunkId, phrases) {
+    await updateMatching(matching => {
+        if (phrases.length) matching.chunkTriggers[chunkId] = phrases;
+        else delete matching.chunkTriggers[chunkId];
     });
 }
 

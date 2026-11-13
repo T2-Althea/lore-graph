@@ -353,3 +353,15 @@ Oct 2026). Paths are relative to the SillyTavern root.
   0.3, halving per reply back. Sticky-only sections are flagged (`sticky`) so they're never
   carried forward again, can't pull definitions, and drop out next to strong matches.
 - Only real replies get `recent`; tests and Test retrieval are unaffected.
+
+## Trigger phrases, Only when named, tabbed panel (0.8.0)
+- matching gains `chunkTriggers` (chunk id -> phrases) and `namedOnlyChunks`. A trigger phrase
+  ("sea monster", or "ocean + creature" = all parts in one message) matches like a name
+  (matchForm, plural-tolerant), scores `triggerScore` x recency as a direct hit, and counts as
+  "named" for the meaning-alone rule. Only-when-named sections are removed from meaning hits.
+  Both are set in the section window (with "Apply to all of <doc>"), shown as icons in the
+  section list and in reports (`report.triggered`).
+- The panel is split into tabs (Lore, Build, Names, Sending, Meaning, Tests, Memory; last tab
+  remembered in `ui_tab`) with tooltips on every control. "Big window" moves `#lore_graph_body`
+  into a large popup and back in `onClose` (before SillyTavern removes the dialog), so all
+  handlers keep working. Panel styles are scoped to `.lore_graph_body` so they work in both places.

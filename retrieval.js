@@ -22,6 +22,7 @@ export const DEFAULT_RETRIEVAL_SETTINGS = {
     definitionPullMinHub: 0.5, // skip terms found in more than 4 chunks (hub factor below 0.5)
     minRelativeScore: 0.08, // drop chunks scoring under this share of the best chunk
     aloneMax: 2,          // with no lore name in the scene, meaning search sends at most this many sections
+    triggerScore: 1.0,    // a section's own trigger phrase counts like a direct name match
     inPlayFactor: 0.8,    // start score of an everyday name allowed because its topic is in play
     stickyScore: 0.3,     // score for a section sent with the previous reply (halves each reply further back)
     // recent: { topics: Map<entity name (lowercase), messages ago>, sticky: { id, repliesAgo }[] }
@@ -63,11 +64,13 @@ export const MATCH_MODES = {
  * @property {string[]} checkedNames match forms already reviewed by the everyday-word check
  * @property {string[]} pinnedChunks chunk ids always sent (within the budget, before anything else)
  * @property {string[]} blockedChunks chunk ids never sent
+ * @property {string[]} namedOnlyChunks chunk ids never sent by meaning search (only through names)
+ * @property {Record<string, string[]>} chunkTriggers chunk id -> trigger phrases ("sea monster", "ocean + creature")
  */
 
 /** @returns {MatchingSettings} */
 export function createEmptyMatching() {
-    return { modes: {}, safeAliases: [], checkedNames: [], pinnedChunks: [], blockedChunks: [] };
+    return { modes: {}, safeAliases: [], checkedNames: [], pinnedChunks: [], blockedChunks: [], namedOnlyChunks: [], chunkTriggers: {} };
 }
 
 // ---- Ordinary English words (lib/common-words.txt) ----
@@ -296,8 +299,19 @@ export function buildRetrievalIndex(graph, chunks, matching, { minAliasLength = 
     const pinnedSet = new Set(matching.pinnedChunks ?? []);
     const pinned = chunks.filter(c => pinnedSet.has(c.id)).map(c => c.id);
     const blocked = new Set((matching.blockedChunks ?? []).filter(id => chunkIds.has(id) && !pinnedSet.has(id)));
+    // Sections only sent through names or trigger phrases, never by meaning search.
+    const namedOnly = new Set((matching.namedOnlyChunks ?? []).filter(id => chunkIds.has(id)));
+    // Trigger phrases the user set on sections; "ocean + creature" needs both in one message.
+    const triggers = [];
+    for (const [chunkId, phrases] of Object.entries(matching.chunkTriggers ?? {})) {
+        if (!chunkIds.has(chunkId) || blocked.has(chunkId)) continue;
+        for (const phrase of phrases) {
+            const parts = String(phrase).split('+').map(p => matchFormKeepingArticle(p.trim())).filter(Boolean);
+            if (parts.length) triggers.push({ chunkId, phrase, parts });
+        }
+    }
 
-    return { entities, byId, adjacency, names, tooShort, hub, chunkWords, entitiesByChunk, idf, pinned, blocked, chunkById: new Map(chunks.map(c => [c.id, c])) };
+    return { entities, byId, adjacency, names, tooShort, hub, chunkWords, entitiesByChunk, idf, pinned, blocked, namedOnly, triggers, chunkById: new Map(chunks.map(c => [c.id, c])) };
 }
 
 /** matchForm, but a leading "the"/"a"/"an" is kept (matchForm drops it). */
@@ -404,6 +418,19 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
         seeds.push({ entityId: hit.entityId, name: entity.name, via: hit.via, message: hit.message, score: hit.weight, mode, capitalised: hit.capitalised });
     }
 
+    // ---- 3a. Trigger phrases the user set on sections (newer messages weigh more) ----
+    /** @type {Map<string, { phrase: string, weight: number, message: number }>} */
+    const triggerHits = new Map();
+    scanned.forEach((text, i) => {
+        const age = scanned.length - 1 - i;
+        const weight = Math.pow(s.recencyDecay, age);
+        const haystack = ` ${matchFormKeepingArticle(text)} `;
+        for (const { chunkId, phrase, parts } of index.triggers ?? []) {
+            if (!parts.every(part => haystack.includes(` ${part} `))) continue;
+            if (weight > (triggerHits.get(chunkId)?.weight ?? 0)) triggerHits.set(chunkId, { phrase, weight, message: age });
+        }
+    });
+
     /** @type {Map<string, { score: number, path: string[] }>} */
     const scores = new Map(seeds.map(seed => [seed.entityId, { score: seed.score, path: [seed.entityId] }]));
 
@@ -425,8 +452,12 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
     // as real lore questions. So it may only send its few closest sections (above a stricter bar),
     // as they are, without spreading through the graph. Everyday names that didn't count don't
     // change this: with hundreds of them, almost any sentence contains one.
+    // Sections set to "Only when named" never come from meaning search.
+    if (meaning && index.namedOnly?.size) {
+        meaning = { ...meaning, chunks: (meaning.chunks ?? []).filter(c => !index.namedOnly.has(c.id)) };
+    }
     let meaningAlone = null;
-    if (meaning && !seeds.length) {
+    if (meaning && !seeds.length && !triggerHits.size) {
         const close = (meaning.chunks ?? []).filter(c => c.alone && index.chunkById.has(c.id)).slice(0, s.aloneMax);
         if (close.length) {
             meaningAlone = `No lore names in the scene, so meaning search sent only its ${close.length} closest section(s) and didn't follow links from them.`;
@@ -484,6 +515,14 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
     const chunkScores = new Map();
     for (const [chunkId, score] of meaningChunks) {
         chunkScores.set(chunkId, { score, direct: true, meaning: true, reasons: [{ entityId: '', name: 'meaning match', amount: score, defined: true }] });
+    }
+    for (const [chunkId, { phrase, weight }] of triggerHits) {
+        const entry = chunkScores.get(chunkId) ?? { score: 0, direct: true, reasons: [] };
+        const amount = weight * s.triggerScore;
+        entry.score += amount;
+        entry.direct = true;
+        entry.reasons.unshift({ entityId: '', name: `trigger phrase "${phrase}"`, amount, defined: true });
+        chunkScores.set(chunkId, entry);
     }
     for (const [id, { score }] of scores) {
         const entity = index.byId.get(id);
@@ -647,5 +686,6 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
         }))
         .sort((a, b) => b.score - a.score);
 
-    return { seeds, meaningSeeds, meaningChunks: [...meaningChunks.keys()], meaningSkipped, meaningAlone, ignored, reached, chunks, text: parts.join('\n\n'), tokens: used };
+    const triggered = [...triggerHits].map(([id, hit]) => ({ id, phrase: hit.phrase, message: hit.message }));
+    return { seeds, triggered, meaningSeeds, meaningChunks: [...meaningChunks.keys()], meaningSkipped, meaningAlone, ignored, reached, chunks, text: parts.join('\n\n'), tokens: used };
 }

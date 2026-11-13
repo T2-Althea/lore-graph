@@ -90,6 +90,7 @@ export function showRetrievalReport(report, title, onOpenChunk, onShowMap = null
             <h4>Matched by name</h4>
             ${report.seeds.length ? `<ul>${report.seeds.map(s => `<li><b>${escapeHtml(s.name)}</b>${s.via !== s.name ? ` (as "${escapeHtml(s.via)}")` : ''} · ${ageLabel(s.message)} · start score ${s.score.toFixed(2)}${s.capitalised === true ? ' · written with a capital letter' : ''}${s.inPlay !== undefined ? ` · everyday word, allowed because its topic is in play (fired ${s.inPlay} message${s.inPlay === 1 ? '' : 's'} ago)` : s.mode === 'context' ? (s.capitalised === false ? ' · written in lowercase, allowed because a lore term is nearby' : ' · everyday word, allowed because a lore term is nearby') : ''}</li>`).join('')}</ul>` : '<div class="lore_graph_meta">No lore names found in the scanned messages.</div>'}
 
+            ${report.triggered?.length ? `<h4>Matched by trigger phrase</h4><ul>${report.triggered.map(t => `<li><span class="lore_graph_link lore_graph_report_chunk" data-chunk="${escapeHtml(t.id)}">${escapeHtml(t.id)}</span> · "${escapeHtml(t.phrase)}" · ${ageLabel(t.message)}</li>`).join('')}</ul>` : ''}
             ${report.topicsInPlay?.length ? `<div class="lore_graph_meta">Topics in play (fired recently, so their everyday names count too): ${report.topicsInPlay.slice(0, 12).map(t => `${escapeHtml(t.name)} <small>(${t.ago} ago)</small>`).join(', ')}</div>` : ''}
             ${renderMeaningSection(report)}
 

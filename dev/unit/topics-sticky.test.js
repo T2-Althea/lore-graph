@@ -80,3 +80,19 @@ test('topics in play: a short name ("Sea") fires only while its own topic is in 
     const inPlay = await retrieve(index, ['The sea feels strange tonight.'], opts({ recent }), countTokens, null);
     assert.ok(inPlay.seeds.some(s => s.entityId === sea.id && s.inPlay === 2));
 });
+
+test('trigger phrases send their section; "a + b" needs both words; Only when named blocks meaning', async () => {
+    const { chunks, graph } = await setup();
+    const abyss = chunks.find(c => /Abyss/.test(c.id)).id;
+    const index = buildRetrievalIndex(graph, chunks, { modes: {}, safeAliases: [], checkedNames: [], chunkTriggers: { [abyss]: ['sunken oath', 'ocean + creature'] }, namedOnlyChunks: [abyss] });
+    const ids = async (text, meaning = null) => sent(await retrieve(index, [text], opts(), countTokens, meaning)).map(c => c.id);
+
+    assert.ok((await ids('She whispered a sunken oath.')).includes(abyss));
+    assert.ok((await ids('The ocean is full of scary creatures.')).includes(abyss), 'both parts, plural ok');
+    assert.ok(!(await ids('The ocean was calm.')).includes(abyss), 'one part is not enough');
+    const report = await retrieve(index, ['She whispered a sunken oath.'], opts(), countTokens, null);
+    assert.equal(report.triggered[0]?.phrase, 'sunken oath');
+
+    const meaning = { chunks: [{ id: abyss, rank: 0, weak: false, alone: true }], entities: [] };
+    assert.ok(!(await ids('Something dark lies below.', meaning)).includes(abyss), 'Only when named: never by meaning alone');
+});

@@ -10,7 +10,7 @@ import { buildGraph, getChunkStatus } from './graph.js';
 import { decideDuplicate, estimateExtractionTokens, findDuplicates, getUsableProfile, loadGraphStore, runExtraction } from './extraction.js';
 import { showDuplicateReview, showGraphBrowser } from './graph-view.js';
 import { DEFAULT_INJECTION_SETTINGS, clearInjection, interceptGeneration, invalidateRetrievalCache, runRetrieval } from './injection.js';
-import { applyEverydayReview, findEverydayWords, loadMatching, setAliasSafe, setChunkChoice, setEntityMatchMode, setNameMatchModes } from './matching.js';
+import { applyEverydayReview, findEverydayWords, getChunkChoice, loadMatching, parseTriggerText, setAliasSafe, setChunkChoice, setChunkTriggers, setEntityMatchMode, setNameMatchModes } from './matching.js';
 import { DEFAULT_RETRIEVAL_SETTINGS, buildRetrievalIndex, countNameCasing, getMatchMode, getNameModes, isOrdinaryWordName, looksCapitalisedInLore } from './retrieval.js';
 import { createSnapshot } from './snapshots.js';
 import { applyOrdinaryWordRule } from './words.js';
@@ -46,6 +46,7 @@ const defaultSettings = {
     memory_every: 6,
     memory_profile: '',
     folded: {}, // panel sections the user collapsed: { sources: true, chunks: true }
+    ui_tab: 'lore', // the panel tab that was open last
 };
 
 /** Runtime state (not saved in settings). */
@@ -157,6 +158,45 @@ function describeEntry(entry) {
     return parts.join(' · ');
 }
 
+/** Panel tabs; the last one opened is remembered in the settings. */
+function bindTabs() {
+    const settings = getSettings();
+    const show = (tab) => {
+        const valid = $(`.lore_graph_tab[data-tab="${tab}"]`).length ? tab : 'lore';
+        $('.lore_graph_tab').each((_, el) => { $(el).toggle($(el).data('tab') === valid); });
+        $('.lore_graph_tab_button').each((_, el) => { $(el).toggleClass('active', $(el).data('tab') === valid); });
+        return valid;
+    };
+    show(settings.ui_tab);
+    $('.lore_graph_tab_button').on('click', function () {
+        settings.ui_tab = show(String($(this).data('tab')));
+        saveSettingsDebounced();
+    });
+}
+
+/**
+ * "Big window": moves the panel's contents into a large popup and back when it closes.
+ * Moving (not copying) keeps every button working.
+ */
+function bindPopout() {
+    $('#lore_graph_popout').on('click', async () => {
+        const body = $('#lore_graph_body');
+        const home = body.parent();
+        if (!home.closest('#lore_graph_settings').length) return; // already popped out
+        const holder = $('<div class="lore_graph_popout_holder"></div>');
+        holder.append(body);
+        await callGenericPopup(holder, POPUP_TYPE.TEXT, '', {
+            large: true,
+            leftAlign: true,
+            allowVerticalScrolling: true,
+            okButton: 'Close',
+            onClose: () => {
+                home.append(body);
+            },
+        });
+    });
+}
+
 /** Collapsible panel sections; which ones are collapsed is remembered in the settings. */
 function bindFolds() {
     const settings = getSettings();
@@ -249,6 +289,8 @@ function renderChunks() {
                     ${chunk.guardrail ? '<i class="fa-solid fa-shield-halved lore_graph_status_error" title="Has a ✕ Not This guardrail"></i>' : ''}
                     ${state.matching?.pinnedChunks.includes(chunk.id) ? '<i class="fa-solid fa-thumbtack" title="Pinned: always sent"></i>' : ''}
                     ${state.matching?.blockedChunks.includes(chunk.id) ? '<i class="fa-solid fa-ban lore_graph_status_error" title="Blocked: never sent"></i>' : ''}
+                    ${state.matching?.namedOnlyChunks.includes(chunk.id) ? '<i class="fa-solid fa-tag" title="Only when named: never sent by meaning search"></i>' : ''}
+                    ${state.matching?.chunkTriggers[chunk.id]?.length ? `<i class="fa-solid fa-key" title="Trigger phrases: ${escapeHtml(state.matching.chunkTriggers[chunk.id].join(', '))}"></i>` : ''}
                     <span class="lore_graph_chunk_tokens">~${chunk.tokens} t</span>
                 </div>`);
             row.on('click', () => showChunk(chunk, entry));
@@ -362,6 +404,25 @@ async function showChunk(chunk, entry) {
             <div class="lore_graph_meta">
                 ${escapeHtml(entry.name)} · lines ${chunk.lineStart}–${chunk.lineEnd} · ~${chunk.tokens} tokens · hash ${escapeHtml(chunk.hash)}
             </div>
+            <div class="lore_graph_chunk_controls">
+                <label>When to send this section
+                    <select class="text_pole lore_graph_chunk_choice" title="Normal: sent when the scene calls for it, by name or by meaning. Pinned: sent with every reply (for core rules of your world). Blocked: never sent (for outdated lore). Only when named: sent when its lore names or trigger phrases come up, but never because a sentence merely sounds similar (stops 'The tree died' from pulling in World Tree lore).">
+                        <option value="">Normal: when the scene calls for it</option>
+                        <option value="named">Only when named: never by meaning search</option>
+                        <option value="pinned">Pinned: with every reply</option>
+                        <option value="blocked">Blocked: never</option>
+                    </select>
+                </label>
+                <div class="menu_button menu_button_icon lore_graph_choice_doc" title="Give every section of ${escapeHtml(chunk.docId)} the choice above (for example, make a whole codex 'Only when named')">
+                    <i class="fa-solid fa-layer-group"></i><span>Apply to all of ${escapeHtml(chunk.docId)}</span>
+                </div>
+                <label>Trigger phrases <small>(also send this section when the chat says any of these)</small>
+                    <textarea class="text_pole textarea_compact lore_graph_chunk_triggers" rows="2" placeholder="sea monster, kraken&#10;ocean + creature" title="One phrase per line or separated by commas. Upper/lowercase and plurals don't matter. Join words with + to require all of them in the same message: 'ocean + creature' matches 'the ocean is full of creatures' but not 'the ocean was calm'."></textarea>
+                </label>
+                <div class="menu_button menu_button_icon lore_graph_triggers_save" title="Save the trigger phrases above">
+                    <i class="fa-solid fa-floppy-disk"></i><span>Save trigger phrases</span>
+                </div>
+            </div>
             <h4>TL;DR</h4>
             <div class="lore_graph_popup_block">${escapeHtml(chunk.tldr || '(none)')}</div>
             <h4>Text</h4>
@@ -371,25 +432,39 @@ async function showChunk(chunk, entry) {
             <div class="lore_graph_popup_block lore_graph_meta">${escapeHtml(formatChunk(chunk))}</div>
             <h4>What the graph got from this chunk</h4>
             ${extractionHtml}
-            <h4>Sending</h4>
-            <div class="lore_graph_meta">Normally a section is sent when the scene calls for it. Pin it to send it with every reply (core rules of the world), or block it to never send it (outdated lore). Pinned sections still count toward the token budget.</div>
-            <select class="text_pole lore_graph_chunk_choice">
-                <option value="">Send when relevant (normal)</option>
-                <option value="pinned">Pinned: always send</option>
-                <option value="blocked">Blocked: never send</option>
-            </select>
             <div class="menu_button menu_button_icon lore_graph_reextract_one" title="Ask the AI again for this chunk only (one request) and replace its result">
                 <i class="fa-solid fa-arrows-rotate"></i><span>Re-extract this chunk</span>
             </div>
         </div>`);
-    const choice = state.matching?.pinnedChunks.includes(chunk.id) ? 'pinned' : state.matching?.blockedChunks.includes(chunk.id) ? 'blocked' : '';
-    root.find('.lore_graph_chunk_choice').val(choice).on('change', async function () {
+    const saveChoice = async (ids, value, message) => {
         try {
-            await setChunkChoice(chunk.id, String($(this).val()) || null);
+            await setChunkChoice(ids, value || null);
             state.matching = await loadMatching();
             invalidateRetrievalCache();
             renderChunks();
-            toastr.success('Saved.', 'Lore Graph', { timeOut: 1500 });
+            toastr.success(message, 'Lore Graph', { timeOut: 2000 });
+        } catch (error) {
+            toastr.error(String(error?.message ?? error), 'Lore Graph');
+        }
+    };
+    const choiceBox = root.find('.lore_graph_chunk_choice').val(getChunkChoice(state.matching, chunk.id));
+    choiceBox.on('change', () => saveChoice(chunk.id, String(choiceBox.val()), 'Saved.'));
+    root.find('.lore_graph_choice_doc').on('click', async () => {
+        const ids = entry.chunks.map(c => c.id);
+        const label = choiceBox.find('option:selected').text();
+        const ok = await callGenericPopup(`<p>Set all ${ids.length} sections of <b>${escapeHtml(chunk.docId)}</b> to "${escapeHtml(label)}"?</p>`, POPUP_TYPE.CONFIRM);
+        if (ok === POPUP_RESULT.AFFIRMATIVE) await saveChoice(ids, String(choiceBox.val()), `${ids.length} sections set to "${label}".`);
+    });
+    const triggerBox = root.find('.lore_graph_chunk_triggers').val((state.matching?.chunkTriggers[chunk.id] ?? []).join('\n'));
+    root.find('.lore_graph_triggers_save').on('click', async () => {
+        try {
+            const phrases = parseTriggerText(String(triggerBox.val()));
+            await setChunkTriggers(chunk.id, phrases);
+            state.matching = await loadMatching();
+            invalidateRetrievalCache();
+            renderChunks();
+            triggerBox.val(phrases.join('\n'));
+            toastr.success(phrases.length ? `${phrases.length} trigger phrase(s) saved.` : 'Trigger phrases removed.', 'Lore Graph', { timeOut: 2000 });
         } catch (error) {
             toastr.error(String(error?.message ?? error), 'Lore Graph');
         }
@@ -1662,6 +1737,8 @@ export async function init() {
 
     const html = await renderExtensionTemplateAsync(EXTENSION_FOLDER, 'settings');
     $('#extensions_settings2').append(html);
+    bindTabs();
+    bindPopout();
     bindFolds();
 
     $('#lore_graph_enabled').prop('checked', settings.enabled).on('input', function () {
