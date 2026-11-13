@@ -21,6 +21,7 @@ export const DEFAULT_RETRIEVAL_SETTINGS = {
     definitionPullTop: 2,  // how many top chunks pull in definitions
     definitionPullMinHub: 0.5, // skip terms found in more than 4 chunks (hub factor below 0.5)
     minRelativeScore: 0.08, // drop chunks scoring under this share of the best chunk
+    aloneMax: 2,          // with no lore name in the scene, meaning search sends at most this many sections
     minAliasLength: 4,    // shorter names are ignored unless marked safe
 };
 
@@ -379,30 +380,35 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
     };
     // 1st 1.0, 2nd 0.85, 3rd 0.7…; hits that only just cleared the threshold count half.
     const hitFactor = (rank, weak) => Math.max(0.5, 1 - 0.15 * rank) * (weak ? s.weakMeaningFactor : 1);
-    // Entity descriptions are one short sentence, so their matches are looser than chunk matches,
-    // and on their own they're not enough ("Nice weather today." matches "Weather sense").
-    // They count only alongside other evidence: a chunk matched by meaning, or a lore name that
-    // counted. An everyday name that wasn't allowed to count vouches only for a matched chunk
-    // that mentions it; with hundreds of everyday names, almost any sentence contains one.
-    // Likewise, without such a name, chunk matches that only just cleared the threshold
-    // aren't trusted on their own ("How are you feeling?" weakly matches mana perception).
-    const meaningChunkIds = new Set((meaning?.chunks ?? []).map(c => c.id));
-    const vouched = seeds.length > 0 || ignored.some(i => i.reason !== 'set to Never match' && i.capitalised !== false
-        && index.byId.get(i.entityId)?.sourceChunks.some(id => meaningChunkIds.has(id)));
-    const meaningTrusted = vouched || (meaning?.chunks ?? []).some(c => !c.weak);
-    if (meaning && !meaningTrusted && ((meaning.chunks?.length ?? 0) || (meaning.entities?.length ?? 0))) {
-        meaningSkipped = 'Only weak meaning matches and no lore names in the messages, so meaning matches were not used.';
-        meaning = null;
+    // With no lore name in the scene, meaning search alone is easily fooled: ordinary talk about
+    // things the lore also covers ("The sea was calm", "an old oak tree") comes as close in meaning
+    // as real lore questions. So it may only send its few closest sections (above a stricter bar),
+    // as they are, without spreading through the graph. Everyday names that didn't count don't
+    // change this: with hundreds of them, almost any sentence contains one.
+    let meaningAlone = null;
+    if (meaning && !seeds.length) {
+        const close = (meaning.chunks ?? []).filter(c => c.alone && index.chunkById.has(c.id)).slice(0, s.aloneMax);
+        if (close.length) {
+            meaningAlone = `No lore names in the scene, so meaning search sent only its ${close.length} closest section(s) and didn't follow links from them.`;
+            meaning = { chunks: close, entities: [] };
+        } else {
+            if ((meaning.chunks?.length ?? 0) || (meaning.entities?.length ?? 0)) {
+                meaningSkipped = 'No lore names in the scene, and nothing was close enough in meaning to send on its own.';
+            }
+            meaning = null;
+        }
     }
-    const entityMeaningAllowed = (meaning?.chunks?.length ?? 0) > 0 || vouched;
-    for (const { id, rank } of entityMeaningAllowed ? (meaning?.entities ?? []) : []) {
+    // Entity descriptions are one short sentence, so their matches are looser than chunk matches;
+    // they only count alongside a lore name.
+    for (const { id, rank } of meaningAlone ? [] : (meaning?.entities ?? [])) {
         addMeaningSeed(id, s.meaningSeedScore * hitFactor(rank, false) * s.entityMeaningFactor, `entity match #${rank + 1}`);
     }
     for (const { id, rank, weak } of meaning?.chunks ?? []) {
         const chunk = index.chunkById.get(id);
         if (!chunk) continue;
-        const score = s.meaningSeedScore * hitFactor(rank, weak);
+        const score = s.meaningSeedScore * hitFactor(rank, meaningAlone ? false : weak);
         meaningChunks.set(id, score);
+        if (meaningAlone) continue;
         // The entities a matched chunk defines carry its meaning into the graph, more weakly.
         for (const entity of index.entities) {
             if (entity.definedIn.includes(id)) addMeaningSeed(entity.id, score * 0.5, `defined in ${id} (chunk match #${rank + 1}${weak ? ', weak' : ''})`);
@@ -478,7 +484,7 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
     // When a top chunk uses a specific term that another section defines, that section is likely
     // needed too ("file a field exception report" in Dungeon §16 → Guild §5 defines it).
     // Hub terms ("Guild", "dungeon") are skipped so this can't flood the budget.
-    if (s.definitionPull > 0) {
+    if (s.definitionPull > 0 && !meaningAlone) {
         const top = [...chunkScores].sort((a, b) => b[1].score - a[1].score).slice(0, s.definitionPullTop);
         /** @type {Map<string, { amount: number, name: string, from: string }>} */
         const pulls = new Map();
@@ -585,5 +591,5 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
         }))
         .sort((a, b) => b.score - a.score);
 
-    return { seeds, meaningSeeds, meaningChunks: [...meaningChunks.keys()], meaningSkipped, ignored, reached, chunks, text: parts.join('\n\n'), tokens: used };
+    return { seeds, meaningSeeds, meaningChunks: [...meaningChunks.keys()], meaningSkipped, meaningAlone, ignored, reached, chunks, text: parts.join('\n\n'), tokens: used };
 }

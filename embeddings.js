@@ -24,6 +24,11 @@ export const DEFAULT_EMBEDDING_SETTINGS = {
     embed_model: '',
     embed_top_k: 4,
     embed_threshold: 0.45,
+    // With no lore name in the scene, meaning search alone sends at most this many sections, and
+    // only ones at least this close. Casual lines about ordinary things the lore also covers
+    // ("The sea was calm") measured up to 0.58; real lore questions without names 0.6 to 0.7.
+    embed_alone_threshold: 0.6,
+    embed_alone_max: 2,
 };
 
 /** A hit at least this far above the threshold counts as "strong"; others count half. */
@@ -167,7 +172,8 @@ export function buildQueryText(messages) {
  * @param {string} queryText
  * @param {object} settings extension settings
  * @param {{ topK?: number, threshold?: number }} [overrides]
- * @returns {Promise<{ chunks: { id: string, rank: number, weak: boolean }[], entities: { id: string, rank: number, weak: boolean }[] }>} best first
+ * @returns {Promise<{ chunks: { id: string, rank: number, weak: boolean, alone: boolean }[], entities: { id: string, rank: number, weak: boolean }[] }>} best first
+ *   `alone`: close enough to be sent even when no lore name is in the scene
  */
 export async function semanticSearch(queryText, settings, overrides = {}) {
     const state = await loadEmbeddingState();
@@ -189,14 +195,17 @@ export async function semanticSearch(queryText, settings, overrides = {}) {
         .filter((id, i, all) => all.indexOf(id) === i);
     const query = (collectionId, minScore) => vectorApi('query', settings, { collectionId, searchText, topK, threshold: minScore });
 
-    const [chunkHits, entityHits, strongChunks] = await Promise.all([
+    const aloneThreshold = Math.max(threshold, Number(settings.embed_alone_threshold ?? DEFAULT_EMBEDDING_SETTINGS.embed_alone_threshold));
+    const [chunkHits, entityHits, strongChunks, aloneChunks] = await Promise.all([
         query(CHUNK_COLLECTION, threshold),
         query(ENTITY_COLLECTION, threshold),
         query(CHUNK_COLLECTION, threshold + STRONG_MARGIN),
+        query(CHUNK_COLLECTION, aloneThreshold),
     ]);
     const strong = new Set(toIds(strongChunks, state.chunks));
+    const alone = new Set(toIds(aloneChunks, state.chunks));
     return {
-        chunks: toIds(chunkHits, state.chunks).map((id, rank) => ({ id, rank, weak: !strong.has(id) })),
+        chunks: toIds(chunkHits, state.chunks).map((id, rank) => ({ id, rank, weak: !strong.has(id), alone: alone.has(id) })),
         entities: toIds(entityHits, state.entities).map((id, rank) => ({ id, rank, weak: false })),
     };
 }

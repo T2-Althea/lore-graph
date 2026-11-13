@@ -37,6 +37,8 @@ export function compactReport(report, chunkById) {
         meaningHits: report.meaningHits ? { chunks: report.meaningHits.chunks.map(c => ({ id: c.id, rank: c.rank, weak: !!c.weak })) } : null,
         meaningSeeds: (report.meaningSeeds ?? []).map(s => ({ name: s.name, via: s.via, score: round(s.score) })),
         meaningSkipped: report.meaningSkipped ?? null,
+        meaningAlone: report.meaningAlone ?? null,
+        meaningChunks: report.meaningChunks ?? [],
         ignored: report.ignored.map(i => ({ name: i.name, via: i.via, reason: i.reason })),
         reached: report.reached.slice(0, 10).map(r => ({ name: r.name, score: round(r.score), path: r.path })),
         // Everything that was sent, plus the 5 closest near-misses (what got cut, and why).

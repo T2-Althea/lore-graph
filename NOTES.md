@@ -330,3 +330,11 @@ Oct 2026). Paths are relative to the SillyTavern root.
 - Fixes: a failed re-extraction of an unchanged section keeps the earlier good result (shows
   `lastError`); empty number boxes no longer save 0 (an empty threshold meant "match everything",
   an empty time limit meant "no limit"), and ignored values snap back on leaving the box.
+
+## Meaning search with no names (0.6.1)
+- Measured on 23 codices: casual lines about things the lore also covers ("The sea was calm",
+  "an old oak tree") score 0.51-0.58 against the closest section; real no-name lore questions
+  0.54-0.69. No single threshold separates them, and one hit used to fan out to 7-12 sections.
+- Now, when no lore name counts, meaning search alone sends at most `embed_alone_max` (2)
+  sections scoring at least `embed_alone_threshold` (0.60), with no entity seeding, link
+  expansion or definition pull. Ignored everyday names no longer vouch for meaning hits.

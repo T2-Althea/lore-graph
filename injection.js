@@ -80,6 +80,7 @@ export async function runRetrieval(chunks, messages, settings) {
         messages: settings.retrieval_messages,
         hops: settings.retrieval_hops,
         budget: settings.retrieval_budget,
+        aloneMax: settings.embed_alone_max,
     }, (text) => getTokenCountAsync(text), meaning);
     const promptText = report.text ? substituteParamsExtended(settings.inject_template || '{{text}}', { text: report.text }) : '';
     const memory = await runMemorySelection(scannedMessages, settings, [...report.seeds, ...(report.meaningSeeds ?? [])].map(s => s.name));

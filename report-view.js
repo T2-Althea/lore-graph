@@ -26,6 +26,10 @@ function renderMeaningSection(report) {
         return `<h4>Matched by meaning</h4><div class="lore_graph_meta">${escapeHtml(report.meaningSkipped)}</div>
             ${chunks.length ? `<ul>${chunks.map(c => `<li>#${c.rank + 1} ${escapeHtml(c.id)} <small>(weak, not used)</small></li>`).join('')}</ul>` : ''}`;
     }
+    if (report.meaningAlone) {
+        return `<h4>Matched by meaning</h4><div class="lore_graph_meta">${escapeHtml(report.meaningAlone)}</div>
+            <ul>${chunks.filter(c => (report.meaningChunks ?? []).includes(c.id)).map(c => `<li>#${c.rank + 1} <span class="lore_graph_link lore_graph_report_chunk" data-chunk="${escapeHtml(c.id)}">${escapeHtml(c.id)}</span></li>`).join('')}</ul>`;
+    }
     if (!chunks.length && !seeds.length) {
         return '<h4>Matched by meaning</h4><div class="lore_graph_meta">Nothing was close enough in meaning (above the similarity threshold).</div>';
     }

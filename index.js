@@ -1566,6 +1566,8 @@ function bindEmbeddingSettings() {
     });
     bindNumber('#lore_graph_embed_top_k', 'embed_top_k', { min: 1, max: 20 });
     bindNumber('#lore_graph_embed_threshold', 'embed_threshold', { min: 0, max: 1, integer: false });
+    bindNumber('#lore_graph_embed_alone_threshold', 'embed_alone_threshold', { min: 0, max: 1, integer: false });
+    bindNumber('#lore_graph_embed_alone_max', 'embed_alone_max', { min: 0, max: 10 });
     $('#lore_graph_embed_build').on('click', onBuildEmbeddingIndex);
     $('#lore_graph_embed_check').on('click', onEmbeddingSanityCheck);
     renderEmbeddingStatus();
