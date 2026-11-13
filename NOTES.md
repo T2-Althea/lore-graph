@@ -365,3 +365,15 @@ Oct 2026). Paths are relative to the SillyTavern root.
   remembered in `ui_tab`) with tooltips on every control. "Big window" moves `#lore_graph_body`
   into a large popup and back in `onClose` (before SillyTavern removes the dialog), so all
   handlers keep working. Panel styles are scoped to `.lore_graph_body` so they work in both places.
+
+## Calmer map (0.8.1)
+- Whole graph: only the 30 best-connected dots are labelled (`node.major`, large font); others
+  (`node.minor`) show their name from min-zoomed-font-size 16, or when spotlighted.
+- "Group by document": each entity goes in a compound box for its home document (where it's
+  defined, else mentioned most). Built-in cose explodes with compounds and can't run on part of a
+  compound graph, so `layoutGroups` lays out each island in a headless scratch cytoscape and
+  arranges islands in rows; cross-document edges get `crossdoc` (faint).
+- Clicking a dot spotlights its closed neighbourhood (`lit`) and fades the rest; clicking empty
+  space clears it. New style rules sit after the edge rules so they win.
+- Placeholders: Hide (default) / Show / Only. Dots whose every link goes to a hidden hub get a
+  dotted ring, and the side panel lists those hidden links.

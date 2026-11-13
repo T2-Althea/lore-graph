@@ -18,6 +18,8 @@ const GUARDRAIL_TYPES = new Set(['contrasts_with', 'exception_to']);
 /** Entities in more chunks than this are "hubs" that connect to everything. */
 const HUB_CHUNKS = 8;
 const MAX_WHOLE_NODES = 700;
+/** In the whole-graph view, only this many of the best-connected dots are labelled until you zoom in. */
+const WHOLE_LABELS = 30;
 
 let libraryPromise = null;
 
@@ -86,8 +88,9 @@ export function highlightFromReport(report, idByName) {
  * @param {string} [options.focus] entity id to center on
  * @param {ReturnType<typeof highlightFromReport>} [options.highlight] from a lore report
  * @param {string} [options.title]
+ * @param {Map<string, string>} [options.docTitles] document id -> title, for the group boxes
  */
-export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story = null, title = 'Lore map' }) {
+export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story = null, title = 'Lore map', docTitles = new Map() }) {
     // Story people/places from the open chat's memories, drawn alongside the lore.
     if (story?.entities.length) {
         graph = { entities: [...graph.entities, ...story.entities], edges: [...graph.edges, ...story.edges] };
@@ -108,8 +111,24 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story
     }
     const isHub = (id) => (byId.get(id)?.sourceChunks.length ?? 0) > HUB_CHUNKS;
     const docsOf = (entity) => new Set(entity.sourceChunks.map(c => c.split(' ')[0]));
+    /** The document an entity belongs to for grouping: where it's defined, else where it's mentioned most. */
+    const homeDoc = (entity) => {
+        if (entity.story) return '';
+        const from = entity.definedIn.length ? entity.definedIn : entity.sourceChunks;
+        const counts = new Map();
+        for (const chunkId of from) {
+            const doc = chunkId.split(' ')[0];
+            counts.set(doc, (counts.get(doc) ?? 0) + 1);
+        }
+        return [...counts].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+    };
     const allDocs = [...new Set(graph.entities.flatMap(e => [...docsOf(e)]))].sort();
     const sorted = [...graph.entities].sort((a, b) => a.name.localeCompare(b.name));
+    /** "COS-025 The Ocean": the document code plus the start of its title, short enough for a box. */
+    const shortDocLabel = (doc) => {
+        const title = String(docTitles.get(doc) ?? '').split(/\s[—–-]\s|:/)[0].trim();
+        return title ? `${doc} ${title.length > 22 ? `${title.slice(0, 21)}…` : title}` : doc;
+    };
 
     const view = {
         mode: highlight ? 'highlight' : focus ? 'around' : 'around',
@@ -118,8 +137,9 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story
         steps: 1,
         type: '',
         doc: '',
-        placeholdersOnly: false,
+        placeholders: 'hide', // hide | show | only
         hideHubs: true,
+        group: true,
         showStory: true,
     };
 
@@ -139,14 +159,17 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story
                 </select>
                 <select class="text_pole lore_graph_map_type"><option value="">All types</option>${ENTITY_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}</select>
                 <select class="text_pole lore_graph_map_doc"><option value="">All documents</option>${allDocs.map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('')}</select>
-                <label class="checkbox_label"><input type="checkbox" class="lore_graph_map_placeholders" /> <span>Placeholders only</span></label>
-                <label class="checkbox_label"><input type="checkbox" class="lore_graph_map_hubs" checked /> <span>Hide hubs</span></label>
+                <select class="text_pole lore_graph_map_placeholders" title="Placeholders are things your lore mentions but never explains (dashed yellow dots)">
+                    <option value="hide">Hide placeholders</option><option value="show">Show placeholders</option><option value="only">Only placeholders</option>
+                </select>
+                <label class="checkbox_label" title="Hubs are very common things (in more than ${HUB_CHUNKS} sections) that connect to almost everything. Hiding them keeps the map readable. Click a dot to see any links that were hidden."><input type="checkbox" class="lore_graph_map_hubs" checked /> <span>Hide hubs</span></label>
+                <label class="checkbox_label" title="Whole graph: put each document's things in its own box"><input type="checkbox" class="lore_graph_map_group" checked /> <span>Group by document</span></label>
                 ${story?.entities.length ? '<label class="checkbox_label"><input type="checkbox" class="lore_graph_map_story" checked /> <span>Story (this chat)</span></label>' : ''}
                 <div class="menu_button lore_graph_map_fit" title="Fit to screen"><i class="fa-solid fa-expand"></i></div>
             </div>
             <div class="lore_graph_map_body">
                 <div class="lore_graph_map_canvas"></div>
-                <div class="lore_graph_map_side"><small class="lore_graph_empty">Click a dot or a line for details. Drag to move things, scroll to zoom.</small></div>
+                <div class="lore_graph_map_side"><small class="lore_graph_empty">Click a dot to spotlight it and see details. Click empty space to undo. Scroll to zoom: more names appear as you zoom in.</small></div>
             </div>
             <div class="lore_graph_map_legend"></div>
         </div>`);
@@ -189,12 +212,13 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story
             if (view.mode === 'highlight' && (highlight.seeds.has(id) || highlight.meaning.has(id))) return true;
             if (!view.showStory && entity.story) return false;
             if (view.hideHubs && view.mode !== 'highlight' && isHub(id)) return false;
+            if (view.placeholders === 'hide' && entity.placeholder && view.mode !== 'highlight' && id !== view.focus) return false;
             if (view.type && entity.type !== view.type) return false;
             if (view.doc && !docsOf(entity).has(view.doc)) return false;
             return true;
         };
         ids = new Set([...ids].filter(keep));
-        if (view.placeholdersOnly) {
+        if (view.placeholders === 'only') {
             // Placeholders plus what refers to them, so you can see where the gap is.
             const placeholders = [...ids].filter(id => byId.get(id).placeholder);
             ids = new Set(placeholders.flatMap(id => [id, ...[...(neighbors.get(id) ?? [])].filter(n => ids.has(n))]));
@@ -203,19 +227,33 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story
     }
 
     function buildElements(ids) {
+        const whole = view.mode === 'whole';
+        // Whole graph: only the best-connected dots keep their names until you zoom in.
+        const visibleDegree = (id) => [...(neighbors.get(id) ?? [])].filter(n => ids.has(n)).length;
+        const major = new Set(whole ? [...ids].sort((a, b) => visibleDegree(b) - visibleDegree(a)).slice(0, WHOLE_LABELS) : ids);
+        const grouped = whole && view.group;
+        const parents = new Map();
         const nodes = [...ids].map(id => {
             const e = byId.get(id);
-            const classes = [e.placeholder ? 'placeholder' : '', e.story ? 'story' : '', id === view.focus && view.mode === 'around' ? 'focus' : ''];
+            const classes = [e.placeholder ? 'placeholder' : '', e.story ? 'story' : '', id === view.focus && view.mode === 'around' ? 'focus' : '', major.has(id) ? (whole ? 'major' : '') : 'minor'];
+            // Every link goes to a hidden hub: mark it, so it doesn't look unconnected.
+            if (view.hideHubs && !visibleDegree(id) && [...(neighbors.get(id) ?? [])].some(isHub)) classes.push('hubonly');
+            const doc = grouped ? homeDoc(e) : '';
+            if (doc && !parents.has(doc)) {
+                parents.set(doc, { data: { id: `doc:${doc}`, label: shortDocLabel(doc) }, classes: 'docgroup' });
+            }
             if (highlight && view.mode === 'highlight') {
                 if (highlight.seeds.has(id)) classes.push('seed');
                 else if (highlight.meaning.has(id)) classes.push('meaning');
                 else classes.push('reached');
             }
-            return { data: { id, label: e.name, color: TYPE_COLORS[e.type] ?? TYPE_COLORS.Concept, size: Math.min(e.sourceChunks.length, 12) }, classes: classes.filter(Boolean).join(' ') };
+            return { data: { id, label: e.name, color: TYPE_COLORS[e.type] ?? TYPE_COLORS.Concept, size: Math.min(e.sourceChunks.length, 12), ...(doc ? { parent: `doc:${doc}` } : {}) }, classes: classes.filter(Boolean).join(' ') };
         });
+        nodes.unshift(...parents.values());
         const edges = graph.edges.filter(e => ids.has(e.source) && ids.has(e.target)).map(e => {
             const classes = [GUARDRAIL_TYPES.has(e.type) ? 'guardrail' : '', e.type === 'related_to' ? 'vague' : '', e.type === 'story' ? 'storylink' : ''];
             if (highlight && view.mode === 'highlight' && (highlight.edges.has(`${e.source}|${e.target}`) || highlight.edges.has(`${e.target}|${e.source}`))) classes.push('path');
+            if (grouped && homeDoc(byId.get(e.source)) !== homeDoc(byId.get(e.target))) classes.push('crossdoc');
             return { data: { id: e.id, source: e.source, target: e.target, type: e.type, weight: e.weight }, classes: classes.filter(Boolean).join(' ') };
         });
         // "Section mentions term" links: from a shown entity defined in that section to the term.
@@ -259,10 +297,69 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story
             ? { name: 'concentric', concentric: (n) => n.id() === view.focus ? 2 : 1, levelWidth: () => 1, minNodeSpacing: 30, animate: false }
             // Small maps get more room so labels don't overlap; big ones stay compact.
             : { name: 'cose', animate: false, randomize: true, numIter: 1500, nodeOverlap: 30, componentSpacing: 80,
-                nodeRepulsion: () => (limited.size < 60 ? 40000 : 9000), idealEdgeLength: () => (limited.size < 60 ? 140 : 90) };
-        cy.layout(layout).run();
+                nodeRepulsion: () => (limited.size < 60 ? 40000 : 14000), idealEdgeLength: () => (limited.size < 60 ? 140 : 110),
+                nestingFactor: 0.1, gravity: 0.6, edgeElasticity: () => 60 };
+        if (view.mode === 'whole' && view.group && cy.nodes('.docgroup').length) {
+            layoutGroups();
+        } else {
+            cy.layout(layout).run();
+        }
         fitView();
-        root.find('.lore_graph_map_side').html(`<small class="lore_graph_empty">${limited.size} entities, ${cy.edges().length} relationships shown. Click a dot or a line for details.</small>`);
+        const zoomHint = view.mode === 'whole' ? ' Only the most connected names are shown until you zoom in.' : '';
+        root.find('.lore_graph_map_side').html(`<small class="lore_graph_empty">${limited.size} entities, ${cy.edges().length} relationships shown. Click a dot to spotlight it and see details. Click empty space to undo.${zoomHint}</small>`);
+    }
+
+    /** "Links to common things hidden by Hide hubs: …" for a clicked dot. */
+    function hiddenHubNote(id, links) {
+        if (!view.hideHubs || isHub(id)) return '';
+        const hidden = [...new Set(links.map(edge => edge.source === id ? edge.target : edge.source).filter(isHub))];
+        if (!hidden.length) return '';
+        return `<div class="lore_graph_meta">Also linked to common things hidden by "Hide hubs": ${hidden.map(h => escapeHtml(byId.get(h)?.name ?? h)).join(', ')}</div>`;
+    }
+
+    /**
+     * Whole graph, grouped: each document's island is laid out on its own (with only its own
+     * links), then the islands are arranged in rows, biggest first. Laying everything out at once
+     * with group boxes makes the built-in layout blow up, and it can't run on part of a group, so
+     * each island is laid out in a hidden scratch copy and the real dots are moved to match.
+     */
+    function layoutGroups() {
+        const groups = cy.nodes('.docgroup').sort((a, b) => b.children().length - a.children().length);
+        const loose = cy.nodes().filter(n => !n.hasClass('docgroup') && !n.isChild());
+        const islands = [...groups.map(g => g.children()), ...(loose.length ? [loose] : [])];
+        const gap = 200;
+        const rowWidth = Math.max(1600, Math.sqrt(cy.nodes().length) * 260);
+        let x = 0;
+        let y = 0;
+        let rowHeight = 0;
+        for (const kids of islands) {
+            const scratch = cytoscape({
+                headless: true,
+                styleEnabled: true,
+                style: [{ selector: 'node', style: { width: 30, height: 30 } }],
+                elements: [
+                    ...kids.map(n => ({ data: { id: n.id() } })),
+                    ...kids.edgesWith(kids).map(e => ({ data: { id: e.id(), source: e.source().id(), target: e.target().id() } })),
+                ],
+            });
+            scratch.layout({
+                name: kids.length > 2 ? 'cose' : 'grid', animate: false, randomize: true, fit: false, numIter: 800,
+                nodeRepulsion: () => 9000, idealEdgeLength: () => 70, nodeOverlap: 20, gravity: 1, componentSpacing: 40,
+            }).run();
+            kids.positions(node => ({ ...scratch.getElementById(node.id()).position() }));
+            scratch.destroy();
+            const box = kids.boundingBox({ includeLabels: false });
+            if (x > 0 && x + box.w > rowWidth) {
+                x = 0;
+                y += rowHeight + gap;
+                rowHeight = 0;
+            }
+            const dx = x - box.x1;
+            const dy = y - box.y1;
+            kids.positions(node => ({ x: node.position('x') + dx, y: node.position('y') + dy }));
+            x += box.w + gap;
+            rowHeight = Math.max(rowHeight, box.h);
+        }
     }
 
     function showEntity(id) {
@@ -279,6 +376,7 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story
             ${e.aliases.length ? `<div class="lore_graph_meta">Also called: ${e.aliases.map(escapeHtml).join(', ')}</div>` : ''}
             <div class="lore_graph_meta">Defined in: ${e.definedIn.length ? chunkLinks(e.definedIn) : '—'}</div>
             <div class="lore_graph_meta">Mentioned in: ${chunkLinks(e.sourceChunks)}</div>`}
+            ${hiddenHubNote(id, links)}
             <div class="menu_button lore_graph_map_center" data-id="${escapeHtml(id)}">Show around this</div>
             <h4>Relations (${links.length})</h4>
             <ul class="lore_graph_relations">${links.slice(0, 40).map(edge => {
@@ -322,7 +420,8 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story
     root.on('change', '.lore_graph_map_steps', function () { view.steps = Number($(this).val()); draw(); });
     root.on('change', '.lore_graph_map_type', function () { view.type = String($(this).val()); draw(); });
     root.on('change', '.lore_graph_map_doc', function () { view.doc = String($(this).val()); draw(); });
-    root.on('change', '.lore_graph_map_placeholders', function () { view.placeholdersOnly = $(this).prop('checked'); draw(); });
+    root.on('change', '.lore_graph_map_placeholders', function () { view.placeholders = String($(this).val()); draw(); });
+    root.on('change', '.lore_graph_map_group', function () { view.group = $(this).prop('checked'); draw(); });
     root.on('change', '.lore_graph_map_hubs', function () { view.hideHubs = $(this).prop('checked'); draw(); });
     root.on('change', '.lore_graph_map_story', function () { view.showStory = $(this).prop('checked'); draw(); });
     root.on('change', '.lore_graph_map_focus', function () {
@@ -365,6 +464,10 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story
                 { selector: 'node.meaning', style: { 'border-width': 4, 'border-color': '#26c6da', 'border-style': 'double' } },
                 { selector: 'node.reached', style: { 'opacity': 0.85 } },
                 { selector: 'node:selected', style: { 'border-width': 4, 'border-color': '#ffffff' } },
+                // Unlabelled until zoomed in (11px text only shows once it's at least 16px on screen).
+                { selector: 'node.minor', style: { 'min-zoomed-font-size': 16 } },
+                // Whole graph: the best-connected names stay readable when zoomed out.
+                { selector: 'node.major', style: { 'font-size': 34, 'font-weight': 'bold', 'min-zoomed-font-size': 5, 'text-outline-width': 4 } },
                 {
                     selector: 'edge',
                     style: {
@@ -389,9 +492,33 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story
                         'label': 'data(label)', 'font-size': 9, 'color': textColor, 'text-outline-color': backgroundColor, 'text-outline-width': 2,
                     },
                 },
+                { selector: 'edge.crossdoc', style: { 'opacity': 0.12 } },
+                { selector: 'node.hubonly', style: { 'border-width': 2, 'border-style': 'dotted', 'border-color': '#8a8a8a' } },
+                {
+                    selector: 'node.docgroup',
+                    style: {
+                        'background-opacity': 0.05, 'background-color': textColor, 'border-width': 1, 'border-color': '#8a8a8a', 'border-opacity': 0.5,
+                        'shape': 'round-rectangle', 'label': 'data(label)', 'text-valign': 'top', 'text-halign': 'center', 'font-size': 40, 'text-wrap': 'wrap', 'text-max-width': '280px',
+                        'font-weight': 'bold', 'min-zoomed-font-size': 5, 'padding': '18px', 'color': textColor, 'text-opacity': 0.7,
+                    },
+                },
+                // Spotlight: a clicked dot, its links and neighbours stay; everything else fades.
+                { selector: '.faded', style: { 'opacity': 0.08, 'text-opacity': 0 } },
+                { selector: 'node.docgroup.faded', style: { 'opacity': 0.25, 'text-opacity': 0.4 } },
+                { selector: 'node.lit', style: { 'min-zoomed-font-size': 0 } },
+                { selector: 'edge.lit', style: { 'opacity': 1, 'width': 2.5 } },
             ],
         });
-        cy.on('tap', 'node', (event) => showEntity(event.target.id()));
+        const clearSpotlight = () => cy.elements().removeClass('faded lit');
+        cy.on('tap', 'node', (event) => {
+            const node = event.target;
+            if (node.hasClass('docgroup')) return;
+            const near = node.closedNeighborhood();
+            cy.elements().removeClass('lit').addClass('faded');
+            near.union(near.nodes().ancestors()).removeClass('faded').addClass('lit');
+            showEntity(node.id());
+        });
+        cy.on('tap', (event) => { if (event.target === cy) clearSpotlight(); });
         cy.on('tap', 'edge', (event) => showEdge(event.target.id()));
         cy.on('dbltap', 'node', (event) => focusOn(event.target.id()));
         draw();

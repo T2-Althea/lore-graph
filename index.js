@@ -906,6 +906,11 @@ async function onHealthCheck() {
     showHealthReport(health, { onOpenChunk: openChunkById, onOpenSnapshots: openSnapshots });
 }
 
+/** Document id -> title, for labelling the map's document boxes. */
+function docTitles() {
+    return new Map(Object.values(state.index?.docs ?? {}).filter(entry => entry.docId).map(entry => [entry.docId, entry.title || entry.name]));
+}
+
 async function getCurrentGraph() {
     const store = await loadStoreOrWarn();
     if (!store) return null;
@@ -923,7 +928,7 @@ async function openGraphMap() {
     // People and places from the open chat's memories (Milestone 6c).
     const memoryState = SillyTavern.getContext().chatId ? getMemoryState() : null;
     const story = memoryState?.memories.length ? buildStoryGraph(memoryState.memories, graph.entities) : null;
-    showGraphMap(graph, { onOpenChunk: openChunkById, story });
+    showGraphMap(graph, { onOpenChunk: openChunkById, story, docTitles: docTitles() });
 }
 
 /** Opens the map showing what a lore report matched and the paths it followed. */
@@ -941,7 +946,7 @@ async function openMapForReport(report) {
         toastr.info('Nothing from this report is in the current graph.', 'Lore Graph');
         return;
     }
-    showGraphMap(graph, { onOpenChunk: openChunkById, highlight, title: 'Why this lore was chosen' });
+    showGraphMap(graph, { onOpenChunk: openChunkById, highlight, title: 'Why this lore was chosen', docTitles: docTitles() });
 }
 
 async function onFindDuplicates() {
