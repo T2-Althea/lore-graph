@@ -10,7 +10,7 @@ import { buildGraph, getChunkStatus } from './graph.js';
 import { decideDuplicate, estimateExtractionTokens, findDuplicates, getUsableProfile, loadGraphStore, runExtraction } from './extraction.js';
 import { showDuplicateReview, showGraphBrowser } from './graph-view.js';
 import { DEFAULT_INJECTION_SETTINGS, clearInjection, interceptGeneration, invalidateRetrievalCache, runRetrieval } from './injection.js';
-import { applyEverydayReview, findEverydayWords, getChunkChoice, loadMatching, parseTriggerText, setAliasSafe, setChunkChoice, setChunkTriggers, setEntityMatchMode, setNameMatchModes } from './matching.js';
+import { applyEverydayReview, findEverydayWords, getChunkChoice, loadMatching, parseTriggerText, setAliasSafe, setChunkChoice, setChunkStopPhrases, setChunkTriggers, setEntityMatchMode, setNameMatchModes } from './matching.js';
 import { DEFAULT_RETRIEVAL_SETTINGS, buildRetrievalIndex, countNameCasing, getMatchMode, getNameModes, isOrdinaryWordName, looksCapitalisedInLore } from './retrieval.js';
 import { createSnapshot } from './snapshots.js';
 import { applyOrdinaryWordRule } from './words.js';
@@ -47,6 +47,7 @@ const defaultSettings = {
     memory_profile: '',
     folded: {}, // panel sections the user collapsed: { sources: true, chunks: true }
     ui_tab: 'lore', // the panel tab that was open last
+    map_view: {},   // the graph map's options from last time (view, hubs, 3D…)
 };
 
 /** Runtime state (not saved in settings). */
@@ -291,6 +292,7 @@ function renderChunks() {
                     ${state.matching?.blockedChunks.includes(chunk.id) ? '<i class="fa-solid fa-ban lore_graph_status_error" title="Blocked: never sent"></i>' : ''}
                     ${state.matching?.namedOnlyChunks.includes(chunk.id) ? '<i class="fa-solid fa-tag" title="Only when named: never sent by meaning search"></i>' : ''}
                     ${state.matching?.chunkTriggers[chunk.id]?.length ? `<i class="fa-solid fa-key" title="Trigger phrases: ${escapeHtml(state.matching.chunkTriggers[chunk.id].join(', '))}"></i>` : ''}
+                    ${state.matching?.chunkStopPhrases?.[chunk.id]?.length ? `<i class="fa-solid fa-hand" title="Stop phrases: ${escapeHtml(state.matching.chunkStopPhrases[chunk.id].join(', '))}"></i>` : ''}
                     <span class="lore_graph_chunk_tokens">~${chunk.tokens} t</span>
                 </div>`);
             row.on('click', () => showChunk(chunk, entry));
@@ -422,6 +424,17 @@ async function showChunk(chunk, entry) {
                 <div class="menu_button menu_button_icon lore_graph_triggers_save" title="Save the trigger phrases above">
                     <i class="fa-solid fa-floppy-disk"></i><span>Save trigger phrases</span>
                 </div>
+                <label>Stop phrases <small>(hold this section back when the chat says any of these, unless the chat names something in it)</small>
+                    <textarea class="text_pole textarea_compact lore_graph_chunk_stops" rows="2" placeholder="elf, elven&#10;enclave" title="The opposite of trigger phrases. If the chat says one of these, this section is not sent when it only came in by meaning, through links, or as a definition. It is still sent if the chat names something this section is about (for example 'Venari'), or one of its own trigger phrases fires. Same format as trigger phrases: one per line or comma, + to require all words in one message."></textarea>
+                </label>
+                <div class="lore_graph_chunk_buttons">
+                    <div class="menu_button menu_button_icon lore_graph_stops_save" title="Save the stop phrases above for this section">
+                        <i class="fa-solid fa-floppy-disk"></i><span>Save stop phrases</span>
+                    </div>
+                    <div class="menu_button menu_button_icon lore_graph_stops_doc" title="Give every section of ${escapeHtml(chunk.docId)} the stop phrases above (replaces theirs)">
+                        <i class="fa-solid fa-layer-group"></i><span>Apply to all of ${escapeHtml(chunk.docId)}</span>
+                    </div>
+                </div>
             </div>
             <h4>TL;DR</h4>
             <div class="lore_graph_popup_block">${escapeHtml(chunk.tldr || '(none)')}</div>
@@ -468,6 +481,30 @@ async function showChunk(chunk, entry) {
         } catch (error) {
             toastr.error(String(error?.message ?? error), 'Lore Graph');
         }
+    });
+
+    const stopBox = root.find('.lore_graph_chunk_stops').val((state.matching?.chunkStopPhrases?.[chunk.id] ?? []).join('\n'));
+    const saveStops = async (ids) => {
+        try {
+            const phrases = parseTriggerText(String(stopBox.val()));
+            await setChunkStopPhrases(ids, phrases);
+            state.matching = await loadMatching();
+            invalidateRetrievalCache();
+            renderChunks();
+            stopBox.val(phrases.join('\n'));
+            const where = ids.length > 1 ? ` on ${ids.length} sections` : '';
+            toastr.success(phrases.length ? `${phrases.length} stop phrase(s) saved${where}.` : `Stop phrases removed${where}.`, 'Lore Graph', { timeOut: 2000 });
+        } catch (error) {
+            toastr.error(String(error?.message ?? error), 'Lore Graph');
+        }
+    };
+    root.find('.lore_graph_stops_save').on('click', () => saveStops([chunk.id]));
+    root.find('.lore_graph_stops_doc').on('click', async () => {
+        const ids = entry.chunks.map(c => c.id);
+        const phrases = parseTriggerText(String(stopBox.val()));
+        const what = phrases.length ? `the stop phrases "${escapeHtml(phrases.join(', '))}"` : 'no stop phrases (removes theirs)';
+        const ok = await callGenericPopup(`<p>Give all ${ids.length} sections of <b>${escapeHtml(chunk.docId)}</b> ${what}?</p>`, POPUP_TYPE.CONFIRM);
+        if (ok === POPUP_RESULT.AFFIRMATIVE) await saveStops(ids);
     });
 
     const popupPromise = callGenericPopup(root, POPUP_TYPE.TEXT, '', { wider: true, leftAlign: true, allowVerticalScrolling: true });
@@ -906,6 +943,18 @@ async function onHealthCheck() {
     showHealthReport(health, { onOpenChunk: openChunkById, onOpenSnapshots: openSnapshots });
 }
 
+/** The map's remembered options, and how to save them when they change. */
+function mapMemory() {
+    const settings = getSettings();
+    return {
+        saved: settings.map_view ?? {},
+        onSave: (view) => {
+            settings.map_view = { ...settings.map_view, ...view };
+            saveSettingsDebounced();
+        },
+    };
+}
+
 /** Document id -> title, for labelling the map's document boxes. */
 function docTitles() {
     return new Map(Object.values(state.index?.docs ?? {}).filter(entry => entry.docId).map(entry => [entry.docId, entry.title || entry.name]));
@@ -928,7 +977,7 @@ async function openGraphMap() {
     // People and places from the open chat's memories (Milestone 6c).
     const memoryState = SillyTavern.getContext().chatId ? getMemoryState() : null;
     const story = memoryState?.memories.length ? buildStoryGraph(memoryState.memories, graph.entities) : null;
-    showGraphMap(graph, { onOpenChunk: openChunkById, story, docTitles: docTitles() });
+    showGraphMap(graph, { onOpenChunk: openChunkById, story, docTitles: docTitles(), ...mapMemory() });
 }
 
 /** Opens the map showing what a lore report matched and the paths it followed. */
@@ -946,7 +995,7 @@ async function openMapForReport(report) {
         toastr.info('Nothing from this report is in the current graph.', 'Lore Graph');
         return;
     }
-    showGraphMap(graph, { onOpenChunk: openChunkById, highlight, title: 'Why this lore was chosen', docTitles: docTitles() });
+    showGraphMap(graph, { onOpenChunk: openChunkById, highlight, title: 'Why this lore was chosen', docTitles: docTitles(), ...mapMemory() });
 }
 
 async function onFindDuplicates() {

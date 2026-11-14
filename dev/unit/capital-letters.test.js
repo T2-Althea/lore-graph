@@ -32,7 +32,7 @@ async function injected(index, text) {
     return { ids: report.chunks.filter(c => c.status === 'full' || c.status === 'tldr').map(c => c.id), report };
 }
 
-test('Capital letter only: capitalised counts, lowercase needs a lore term nearby', async () => {
+test('Capital letter only: capitalised counts, lowercase needs a related lore term nearby', async () => {
     const chunks = await loadChunks([path.join(FIXTURES, 'Tide_Temple.txt'), path.join(FIXTURES, 'Marsh_Wardens.txt')]);
     const { graph } = buildIndexWithFakeAi(chunks);
     const matching = { modes: { sea: 'capital', abyss: 'capital' }, safeAliases: [], checkedNames: [] };
@@ -49,8 +49,12 @@ test('Capital letter only: capitalised counts, lowercase needs a lore term nearb
     const start = await injected(index, 'Sea spray soaked my boots.');
     assert.deepEqual(start.ids, [], 'a capital at the start of a sentence is not enough');
 
-    const vouched = await injected(index, 'The Marsh Wardens dumped sea water on the fire.');
-    assert.ok(vouched.ids.includes('TT-001 §1 The Sea'), 'lowercase still counts next to a clear lore term');
+    const vouched = await injected(index, 'The Tide Temple priests dumped sea water on the fire.');
+    assert.ok(vouched.ids.includes('TT-001 §1 The Sea'), 'lowercase still counts next to a related lore term');
+
+    const unrelated = await injected(index, 'The Marsh Wardens dumped sea water on the fire.');
+    assert.ok(!unrelated.report.seeds.some(s => s.name === 'Sea'), 'a lore term from an unrelated document does not vouch for it');
+    assert.match(unrelated.report.ignored.find(i => i.name === 'Sea')?.reason ?? '', /no related/);
 
     // Without the mode (and "Sea" marked safe despite being short), every "sea" matches.
     const plain = buildRetrievalIndex(graph, chunks, { modes: {}, safeAliases: ['sea'], checkedNames: [] });

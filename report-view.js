@@ -10,6 +10,7 @@ const STATUS_LABELS = {
     cut: 'cut (budget)',
     'below threshold': 'too weak',
     blocked: 'blocked (never sent)',
+    stopped: 'held back (stop phrase)',
 };
 
 /** The "Matched by meaning" part of a report (Milestone 3b). */
@@ -33,11 +34,14 @@ function renderMeaningSection(report) {
     if (!chunks.length && !seeds.length) {
         return '<h4>Matched by meaning</h4><div class="lore_graph_meta">Nothing was close enough in meaning (above the similarity threshold).</div>';
     }
+    // Candidates, not what was sent: they compete with name matches for the budget.
+    const sent = new Set((report.chunks ?? []).filter(c => c.status === 'full' || c.status === 'tldr').map(c => c.id));
+    const sentCount = chunks.filter(c => sent.has(c.id)).length;
     return `<h4>Matched by meaning</h4>
-        ${chunks.length ? `<div class="lore_graph_meta">Closest chunks (rank only; SillyTavern doesn't return similarity numbers):</div>
-            <ul>${chunks.map(c => `<li>#${c.rank + 1} <span class="lore_graph_link lore_graph_report_chunk" data-chunk="${escapeHtml(c.id)}">${escapeHtml(c.id)}</span>${c.weak ? ' <small>(just above the threshold, counts half)</small>' : ''}</li>`).join('')}</ul>` : ''}
-        ${seeds.length ? `<div class="lore_graph_meta">Entities seeded by meaning:</div>
-            <ul>${seeds.map(s => `<li><b>${escapeHtml(s.name)}</b> · ${escapeHtml(s.via)} · start score ${s.score.toFixed(2)}</li>`).join('')}</ul>` : ''}`;
+        ${chunks.length ? `<div class="lore_graph_meta">Closest chunks in meaning: candidates only, ${sentCount} of ${chunks.length} made it into what was sent (rank only; SillyTavern doesn't return similarity numbers):</div>
+            <ul>${chunks.map(c => `<li>#${c.rank + 1} <span class="lore_graph_link lore_graph_report_chunk" data-chunk="${escapeHtml(c.id)}">${escapeHtml(c.id)}</span>${c.weak ? ' <small>(just above the threshold, counts half)</small>' : ''} ${sent.has(c.id) ? '<b>· sent</b>' : '<small>· not sent (scored too low)</small>'}</li>`).join('')}</ul>` : ''}
+        ${seeds.length ? `<details><summary class="lore_graph_meta">${seeds.length} entities seeded by meaning (they only add a little score)</summary>
+            <ul>${seeds.map(s => `<li><b>${escapeHtml(s.name)}</b> · ${escapeHtml(s.via)} · start score ${s.score.toFixed(2)}</li>`).join('')}</ul></details>` : ''}`;
 }
 
 /** The "Story memory" part of a report (Milestone 6b). */
@@ -70,7 +74,8 @@ function ageLabel(age) {
  */
 export function showRetrievalReport(report, title, onOpenChunk, onShowMap = null) {
     const included = report.chunks.filter(c => c.status === 'full' || c.status === 'tldr');
-    const notIncluded = report.chunks.filter(c => c.status === 'cut' || c.status === 'below threshold' || c.status === 'blocked');
+    const notIncluded = report.chunks.filter(c => c.status === 'cut' || c.status === 'below threshold' || c.status === 'blocked' || c.status === 'stopped');
+    const stopped = report.chunks.filter(c => c.status === 'stopped');
 
     const chunkRow = (c) => `
         <tr>
@@ -88,9 +93,10 @@ export function showRetrievalReport(report, title, onOpenChunk, onShowMap = null
             <div class="lore_graph_meta">${included.length} chunk(s) injected · ${report.tokens} tokens${report.type ? ` · generation type: ${escapeHtml(report.type)}` : ''}${report.at ? ` · ${new Date(report.at).toLocaleTimeString()}` : ''}</div>
 
             <h4>Matched by name</h4>
-            ${report.seeds.length ? `<ul>${report.seeds.map(s => `<li><b>${escapeHtml(s.name)}</b>${s.via !== s.name ? ` (as "${escapeHtml(s.via)}")` : ''} · ${ageLabel(s.message)} · start score ${s.score.toFixed(2)}${s.capitalised === true ? ' · written with a capital letter' : ''}${s.inPlay !== undefined ? ` · everyday word, allowed because its topic is in play (fired ${s.inPlay} message${s.inPlay === 1 ? '' : 's'} ago)` : s.mode === 'context' ? (s.capitalised === false ? ' · written in lowercase, allowed because a lore term is nearby' : ' · everyday word, allowed because a lore term is nearby') : ''}</li>`).join('')}</ul>` : '<div class="lore_graph_meta">No lore names found in the scanned messages.</div>'}
+            ${report.seeds.length ? `<ul>${report.seeds.map(s => `<li><b>${escapeHtml(s.name)}</b>${s.via !== s.name ? ` (as "${escapeHtml(s.via)}")` : ''} · ${ageLabel(s.message)} · start score ${s.score.toFixed(2)}${s.capitalised === true ? ' · written with a capital letter' : ''}${s.inPlay !== undefined ? ` · everyday word, allowed because its topic is in play (fired ${s.inPlay} message${s.inPlay === 1 ? '' : 's'} ago)` : s.mode === 'context' ? (s.capitalised === false ? ' · written in lowercase, allowed because a related lore term is nearby' : ' · everyday word, allowed because a related lore term is nearby') : ''}</li>`).join('')}</ul>` : '<div class="lore_graph_meta">No lore names found in the scanned messages.</div>'}
 
             ${report.triggered?.length ? `<h4>Matched by trigger phrase</h4><ul>${report.triggered.map(t => `<li><span class="lore_graph_link lore_graph_report_chunk" data-chunk="${escapeHtml(t.id)}">${escapeHtml(t.id)}</span> · "${escapeHtml(t.phrase)}" · ${ageLabel(t.message)}</li>`).join('')}</ul>` : ''}
+            ${stopped.length ? `<details><summary><b>Held back by stop phrase (${stopped.length})</b></summary><ul>${stopped.map(c => `<li><span class="lore_graph_link lore_graph_report_chunk" data-chunk="${escapeHtml(c.id)}">${escapeHtml(c.id)}</span> · the chat says "${escapeHtml(c.stopPhrase)}" (${ageLabel(c.stopMessage)}) and names nothing in it</li>`).join('')}</ul></details>` : ''}
             ${report.topicsInPlay?.length ? `<div class="lore_graph_meta">Topics in play (fired recently, so their everyday names count too): ${report.topicsInPlay.slice(0, 12).map(t => `${escapeHtml(t.name)} <small>(${t.ago} ago)</small>`).join(', ')}</div>` : ''}
             ${renderMeaningSection(report)}
 

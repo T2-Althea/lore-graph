@@ -90,8 +90,10 @@ export function highlightFromReport(report, idByName) {
  * @param {ReturnType<typeof highlightFromReport>} [options.highlight] from a lore report
  * @param {string} [options.title]
  * @param {Map<string, string>} [options.docTitles] document id -> title, for the group boxes
+ * @param {object} [options.saved] map options remembered from last time (see MAP_SAVED_KEYS)
+ * @param {(saved: object) => void} [options.onSave] called with the options whenever one changes
  */
-export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story = null, title = 'Lore map', docTitles = new Map() }) {
+export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story = null, title = 'Lore map', docTitles = new Map(), saved = {}, onSave = null }) {
     // Story people/places from the open chat's memories, drawn alongside the lore.
     if (story?.entities.length) {
         graph = { entities: [...graph.entities, ...story.entities], edges: [...graph.edges, ...story.edges] };
@@ -145,6 +147,30 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story
         colorBy: 'type', // 3D only: type | document
         showStory: true,
     };
+    // Options remembered from last time (filters by type/document aren't, so the map never opens empty).
+    const valid = {
+        mode: (v) => v === 'around' || v === 'whole',
+        steps: (v) => v === 1 || v === 2,
+        placeholders: (v) => ['hide', 'show', 'only'].includes(v),
+        hideHubs: (v) => typeof v === 'boolean',
+        group: (v) => typeof v === 'boolean',
+        threeD: (v) => v === false || (v === true && canDraw3D()),
+        colorBy: (v) => v === 'type' || v === 'document',
+        showStory: (v) => typeof v === 'boolean',
+    };
+    for (const [key, ok] of Object.entries(valid)) {
+        if (key === 'mode' && (highlight || focus)) continue; // a report or "show on map" picks its own view
+        if (saved && Object.hasOwn(saved, key) && ok(saved[key])) view[key] = saved[key];
+    }
+    const persist = () => {
+        if (!onSave) return;
+        const out = {};
+        for (const key of Object.keys(valid)) {
+            if (key === 'mode' && view.mode === 'highlight') continue;
+            out[key] = view[key];
+        }
+        onSave(out);
+    };
 
     const root = $(`
         <div class="lore_graph_popup lore_graph_map">
@@ -183,6 +209,13 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story
         </div>`);
 
     root.find('.lore_graph_map_mode').val(view.mode);
+    root.find('.lore_graph_map_steps').val(String(view.steps));
+    root.find('.lore_graph_map_placeholders').val(view.placeholders);
+    root.find('.lore_graph_map_hubs').prop('checked', view.hideHubs);
+    root.find('.lore_graph_map_group').prop('checked', view.group);
+    root.find('.lore_graph_map_story').prop('checked', view.showStory);
+    root.find('.lore_graph_map_3d').prop('checked', view.threeD);
+    root.find('.lore_graph_map_color').val(view.colorBy).toggle(view.threeD);
     root.find('.lore_graph_map_focus').val(view.mode === 'highlight' ? '' : (byId.get(view.focus)?.name ?? ''));
     root.find('.lore_graph_map_legend').html(
         Object.entries(TYPE_COLORS).map(([type, color]) => `<span class="lore_graph_map_key"><i style="background:${color}"></i>${type}</span>`).join('')
@@ -525,6 +558,9 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story
         three?.setColorBy(view.colorBy);
         updateLegend();
     });
+    updateLegend();
+    // Bound after the handlers above, so the view is already updated when it's saved.
+    root.on('change', '.lore_graph_map_toolbar select, .lore_graph_map_toolbar input[type="checkbox"]', persist);
     root.on('click', '.lore_graph_map_center', function () { focusOn(String($(this).data('id'))); });
     root.on('click', '.lore_graph_map_entity', function () { focusOn(String($(this).data('id'))); });
     root.on('click', '.lore_graph_map_chunk', function () { onOpenChunk(String($(this).data('chunk'))); });

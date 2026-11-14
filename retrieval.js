@@ -66,11 +66,13 @@ export const MATCH_MODES = {
  * @property {string[]} blockedChunks chunk ids never sent
  * @property {string[]} namedOnlyChunks chunk ids never sent by meaning search (only through names)
  * @property {Record<string, string[]>} chunkTriggers chunk id -> trigger phrases ("sea monster", "ocean + creature")
+ * @property {Record<string, string[]>} [chunkStopPhrases] chunk id -> stop phrases: held back when the chat says one,
+ *   unless the chat names something the section is about
  */
 
 /** @returns {MatchingSettings} */
 export function createEmptyMatching() {
-    return { modes: {}, safeAliases: [], checkedNames: [], pinnedChunks: [], blockedChunks: [], namedOnlyChunks: [], chunkTriggers: {} };
+    return { modes: {}, safeAliases: [], checkedNames: [], pinnedChunks: [], blockedChunks: [], namedOnlyChunks: [], chunkTriggers: {}, chunkStopPhrases: {} };
 }
 
 // ---- Ordinary English words (lib/common-words.txt) ----
@@ -310,8 +312,17 @@ export function buildRetrievalIndex(graph, chunks, matching, { minAliasLength = 
             if (parts.length) triggers.push({ chunkId, phrase, parts });
         }
     }
+    // Stop phrases: the opposite of triggers ("elf" on a Venari section).
+    const stops = [];
+    for (const [chunkId, phrases] of Object.entries(matching.chunkStopPhrases ?? {})) {
+        if (!chunkIds.has(chunkId)) continue;
+        for (const phrase of phrases) {
+            const parts = String(phrase).split('+').map(p => matchFormKeepingArticle(p.trim())).filter(Boolean);
+            if (parts.length) stops.push({ chunkId, phrase, parts });
+        }
+    }
 
-    return { entities, byId, adjacency, names, tooShort, hub, chunkWords, entitiesByChunk, idf, pinned, blocked, namedOnly, triggers, chunkById: new Map(chunks.map(c => [c.id, c])) };
+    return { entities, byId, adjacency, names, tooShort, hub, chunkWords, entitiesByChunk, idf, pinned, blocked, namedOnly, triggers, stops, chunkById: new Map(chunks.map(c => [c.id, c])) };
 }
 
 /** matchForm, but a leading "the"/"a"/"an" is kept (matchForm drops it). */
@@ -343,11 +354,32 @@ function contentWords(text) {
 }
 
 /**
+ * Whether two entities belong together closely enough for one to vouch for the other: the same
+ * thing, from the same document, linked directly, or linked through one small (non-hub) term.
+ * Links through big hubs don't count: almost everything is a few steps from "Valcarra".
+ * @param {ReturnType<typeof buildRetrievalIndex>} index
+ * @param {string} a
+ * @param {string} b
+ */
+export function isRelatedEntity(index, a, b) {
+    if (a === b) return true;
+    const docsOf = (id) => new Set((index.byId.get(id)?.sourceChunks ?? []).map(c => index.chunkById.get(c)?.docId).filter(Boolean));
+    const docsA = docsOf(a);
+    for (const doc of docsOf(b)) if (docsA.has(doc)) return true;
+    for (const { other } of index.adjacency.get(a) ?? []) {
+        if (other === b) return true;
+        if ((index.hub.get(other) ?? 0) < 0.5) continue; // a hub (found in more than 4 sections)
+        for (const { other: far } of index.adjacency.get(other) ?? []) if (far === b) return true;
+    }
+    return false;
+}
+
+/**
  * @typedef {object} RetrievalReport everything needed to explain an injection
  * @property {{ entityId: string, name: string, via: string, message: number, score: number, mode: string }[]} seeds
  * @property {{ entityId: string, name: string, via: string, reason: string }[]} ignored
  * @property {{ entityId: string, name: string, score: number, path: string[] }[]} reached entities found through relationships
- * @property {{ id: string, score: number, direct: boolean, reasons: { entityId: string, name: string, amount: number, defined: boolean }[], status: 'full'|'tldr'|'cut'|'below threshold', tokens: number }[]} chunks
+ * @property {{ id: string, score: number, direct: boolean, reasons: { entityId: string, name: string, amount: number, defined: boolean }[], status: 'full'|'tldr'|'cut'|'below threshold'|'blocked'|'stopped', tokens: number }[]} chunks
  * @property {string} text the lore block (without the template)
  * @property {number} tokens
  */
@@ -400,18 +432,19 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
             ignored.push({ entityId: hit.entityId, name: entity.name, via: hit.via, reason: 'set to Never match' });
             continue;
         }
-        if (mode === 'context' && !strongIds.length) {
+        if (mode === 'context' && !strongIds.some(id => isRelatedEntity(index, id, hit.entityId))) {
             // Topic in play: "the sea" counts if Primordial Sea itself fired for a recent reply.
             const inPlay = s.recent?.topics?.get(entity.name.toLowerCase());
             if (inPlay !== undefined) {
                 seeds.push({ entityId: hit.entityId, name: entity.name, via: hit.via, message: hit.message, score: hit.weight * s.inPlayFactor, mode, capitalised: hit.capitalised, inPlay });
                 continue;
             }
-            // Everyday words ("plate", "smell") only count alongside a clearly lore-specific term.
+            // Everyday words ("plate", "smell") only count alongside a clearly lore-specific term
+            // that belongs with them ("customs" next to an unrelated forest is just customs).
             // Two everyday words can't vouch for each other: they often appear together in ordinary talk.
             const reason = hit.capitalised === false
-                ? 'written without a capital letter (set to Capital letter only), and no lore-specific term nearby'
-                : 'everyday word with no lore-specific term nearby';
+                ? 'written without a capital letter (set to Capital letter only), and no related lore-specific term nearby'
+                : 'everyday word with no related lore-specific term nearby';
             ignored.push({ entityId: hit.entityId, name: entity.name, via: hit.via, reason, capitalised: hit.capitalised });
             continue;
         }
@@ -421,13 +454,17 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
     // ---- 3a. Trigger phrases the user set on sections (newer messages weigh more) ----
     /** @type {Map<string, { phrase: string, weight: number, message: number }>} */
     const triggerHits = new Map();
+    /** @type {Map<string, { phrase: string, weight: number, message: number }>} chunk id -> stop phrase found */
+    const stopHits = new Map();
     scanned.forEach((text, i) => {
         const age = scanned.length - 1 - i;
         const weight = Math.pow(s.recencyDecay, age);
         const haystack = ` ${matchFormKeepingArticle(text)} `;
-        for (const { chunkId, phrase, parts } of index.triggers ?? []) {
-            if (!parts.every(part => haystack.includes(` ${part} `))) continue;
-            if (weight > (triggerHits.get(chunkId)?.weight ?? 0)) triggerHits.set(chunkId, { phrase, weight, message: age });
+        for (const [list, found] of [[index.triggers, triggerHits], [index.stops, stopHits]]) {
+            for (const { chunkId, phrase, parts } of list ?? []) {
+                if (!parts.every(part => haystack.includes(` ${part} `))) continue;
+                if (weight > (found.get(chunkId)?.weight ?? 0)) found.set(chunkId, { phrase, weight, message: age });
+            }
         }
     });
 
@@ -439,11 +476,15 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
     const meaningSeeds = [];
     /** @type {Map<string, number>} chunk id -> direct score from a meaning hit */
     const meaningChunks = new Map();
-    const addMeaningSeed = (entityId, score, via) => {
+    /** @type {Map<string, string>} entity id -> the meaning-matched chunk it was seeded from */
+    const meaningOrigin = new Map();
+    const addMeaningSeed = (entityId, score, via, fromChunk = null) => {
         const entity = index.byId.get(entityId);
         if (!entity || score <= (scores.get(entityId)?.score ?? 0)) return;
         scores.set(entityId, { score, path: [entityId] });
         meaningSeeds.push({ entityId, name: entity.name, via, score });
+        if (fromChunk) meaningOrigin.set(entityId, fromChunk);
+        else meaningOrigin.delete(entityId);
     };
     // 1st 1.0, 2nd 0.85, 3rd 0.7…; hits that only just cleared the threshold count half.
     const hitFactor = (rank, weak) => Math.max(0.5, 1 - 0.15 * rank) * (weak ? s.weakMeaningFactor : 1);
@@ -482,7 +523,7 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
         if (meaningAlone) continue;
         // The entities a matched chunk defines carry its meaning into the graph, more weakly.
         for (const entity of index.entities) {
-            if (entity.definedIn.includes(id)) addMeaningSeed(entity.id, score * 0.5, `defined in ${id} (chunk match #${rank + 1}${weak ? ', weak' : ''})`);
+            if (entity.definedIn.includes(id)) addMeaningSeed(entity.id, score * 0.5, `defined in ${id} (chunk match #${rank + 1}${weak ? ', weak' : ''})`, id);
         }
     }
 
@@ -521,18 +562,23 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
         const amount = weight * s.triggerScore;
         entry.score += amount;
         entry.direct = true;
+        entry.named = true;
         entry.reasons.unshift({ entityId: '', name: `trigger phrase "${phrase}"`, amount, defined: true });
         chunkScores.set(chunkId, entry);
     }
-    for (const [id, { score }] of scores) {
+    for (const [id, { score, path }] of scores) {
         const entity = index.byId.get(id);
+        // Terms seeded from a meaning-matched section carry its meaning outward; they don't add
+        // to that same section again (one that defines many terms would outrank real name matches).
+        const origin = path.length === 1 ? meaningOrigin.get(id) : undefined;
         for (const chunkId of entity.sourceChunks) {
-            if (!index.chunkById.has(chunkId)) continue;
+            if (!index.chunkById.has(chunkId) || chunkId === origin) continue;
             const defined = entity.definedIn.includes(chunkId);
             const amount = score * (defined ? 1 : MENTION_WEIGHT) * index.hub.get(id);
             const entry = chunkScores.get(chunkId) ?? { score: 0, direct: false, reasons: [] };
             entry.score += amount;
             entry.direct ||= seedIds.has(id);
+            entry.named ||= seedIds.has(id); // the chat itself names something in it (not meaning)
             entry.reasons.push({ entityId: id, name: entity.name, amount, defined });
             chunkScores.set(chunkId, entry);
         }
@@ -586,11 +632,13 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
         for (const [chunkId, entry] of top) {
             for (const entity of index.entitiesByChunk.get(chunkId) ?? []) {
                 if (entity.definedIn.includes(chunkId) || index.hub.get(entity.id) < s.definitionPullMinHub) continue;
-                for (const definingChunk of entity.definedIn) {
-                    if (definingChunk === chunkId || !index.chunkById.has(definingChunk)) continue;
-                    const amount = entry.score * s.definitionPull * index.hub.get(entity.id);
-                    if (amount > (pulls.get(definingChunk)?.amount ?? 0)) pulls.set(definingChunk, { amount, name: entity.name, from: chunkId });
-                }
+                // One definition per term: a passing mention of "forest Venari" shouldn't bring in
+                // every section that describes them. The one already scoring best wins (else the first).
+                const candidates = entity.definedIn.filter(id => id !== chunkId && index.chunkById.has(id));
+                if (!candidates.length) continue;
+                const definingChunk = candidates.reduce((best, id) => ((chunkScores.get(id)?.score ?? 0) > (chunkScores.get(best)?.score ?? 0) ? id : best));
+                const amount = entry.score * s.definitionPull * index.hub.get(entity.id);
+                if (amount > (pulls.get(definingChunk)?.amount ?? 0)) pulls.set(definingChunk, { amount, name: entity.name, from: chunkId });
             }
         }
         for (const [chunkId, { amount, name, from }] of pulls) {
@@ -605,7 +653,9 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
     // Pinned sections go first, whatever the scene; blocked ones are never sent.
     const pinnedIds = new Set(index.pinned ?? []);
     const blockedIds = index.blocked ?? new Set();
-    const ranked = [...chunkScores].filter(([id]) => !pinnedIds.has(id) && !blockedIds.has(id)).sort((a, b) => b[1].score - a[1].score);
+    // Stop phrases hold a section back unless the chat names something in it (or its trigger fired).
+    const stoppedIds = new Set([...stopHits.keys()].filter(id => chunkScores.has(id) && !chunkScores.get(id).named && !pinnedIds.has(id)));
+    const ranked = [...chunkScores].filter(([id]) => !pinnedIds.has(id) && !blockedIds.has(id) && !stoppedIds.has(id)).sort((a, b) => b[1].score - a[1].score);
     const best = ranked[0]?.[1].score ?? 0;
     const sectionsWithTldr = new Set();
     const parts = [];
@@ -638,6 +688,9 @@ export async function retrieve(index, messages, settings, countTokens, meaning =
     for (const [id, entry] of chunkScores) {
         if (blockedIds.has(id)) {
             chunks.push({ id, score: entry.score, direct: entry.direct, reasons: entry.reasons, sharedWords: entry.sharedWords ?? [], status: 'blocked', tokens: 0 });
+        } else if (stoppedIds.has(id)) {
+            const { phrase, message } = stopHits.get(id);
+            chunks.push({ id, score: entry.score, direct: entry.direct, reasons: entry.reasons, sharedWords: entry.sharedWords ?? [], status: 'stopped', stopPhrase: phrase, stopMessage: message, tokens: 0 });
         }
     }
 

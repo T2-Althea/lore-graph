@@ -387,3 +387,26 @@ Oct 2026). Paths are relative to the SillyTavern root.
   flies to the dot, its links light up with arrows/particles, side panel shows details; empty
   space clears. Fits the view once the simulation settles (onEngineStop) and once early.
   Destroyed on leaving 3D, redraws and popup close (WebGL contexts are limited).
+
+- 0.9.1: map options (view, steps, placeholders, hubs, group, 3D, colour, story) are saved in
+  `settings.map_view` and restored next time; type/document filters are not, so the map never
+  opens empty. Reports and "show on map" still pick their own view.
+- 0.9.1: extraction prompt no longer turns topic-style headings ("Life at Sea", "Why She Did It")
+  into entities; only titles that name a thing do. Cached results are keyed on the chunk hash, so
+  this only affects sections extracted from now on (or a full re-extract). Seen with Sonnet: about
+  25 of 42 unlinked entities were headings, and phrases like "their own kind" could fire in chat.
+- 0.9.1: an everyday-word name (Needs context) now needs a *related* lore term nearby: same entity,
+  same document, a direct link, or a link through one small (non-hub) term (`isRelatedEntity`).
+  "customs" next to "Great Forest of Veridia" used to pull four Calascia/port sections; they only
+  meet through hubs (Common Measure, Valcarra, Manacite).
+- 0.9.1: terms seeded from a meaning-matched section no longer add score back to that same section.
+  A weak meaning hit on a section defining seven terms scored 2.96, above the named forest's 1.47;
+  now 1.85, and Venari sections in that scene went from 8 to 4-5.
+- 0.9.1: definition pull brings in one defining section per term (the best-scoring one), not all
+  of them: "with forest Venari" in the Enclaves section pulled three Venari sections (+0.68 each,
+  Eye Paint included). The report now marks each meaning candidate as sent or not sent.
+- 0.9.1: stop phrases (`matching.chunkStopPhrases`), the opposite of trigger phrases. A section
+  whose stop phrase is in the scanned messages is held back (status `stopped`) unless the chat names
+  one of its entities (a name seed, not a meaning seed) or its own trigger fired; pinned ignores them.
+  Section window has the box plus "Apply to all of <doc>". Tested: "elf, elven, enclave" on all
+  VEN-01 sections drops them from the elf-in-Veridia scene, and a scene naming a Venari still gets them.

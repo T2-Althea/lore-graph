@@ -24,6 +24,7 @@ function normalize(data) {
         if (Array.isArray(data.blockedChunks)) matching.blockedChunks = data.blockedChunks;
         if (Array.isArray(data.namedOnlyChunks)) matching.namedOnlyChunks = data.namedOnlyChunks;
         if (data.chunkTriggers && typeof data.chunkTriggers === 'object' && !Array.isArray(data.chunkTriggers)) matching.chunkTriggers = data.chunkTriggers;
+        if (data.chunkStopPhrases && typeof data.chunkStopPhrases === 'object' && !Array.isArray(data.chunkStopPhrases)) matching.chunkStopPhrases = data.chunkStopPhrases;
     }
     return matching;
 }
@@ -108,6 +109,23 @@ export async function setChunkTriggers(chunkId, phrases) {
     await updateMatching(matching => {
         if (phrases.length) matching.chunkTriggers[chunkId] = phrases;
         else delete matching.chunkTriggers[chunkId];
+    });
+}
+
+/**
+ * Saves stop phrases for one or more sections (empty list removes them): when the chat says one,
+ * the section is held back unless the chat names something it's about.
+ * @param {string|string[]} chunkIds
+ * @param {string[]} phrases
+ */
+export async function setChunkStopPhrases(chunkIds, phrases) {
+    const ids = Array.isArray(chunkIds) ? chunkIds : [chunkIds];
+    await updateMatching(matching => {
+        matching.chunkStopPhrases ??= {};
+        for (const id of ids) {
+            if (phrases.length) matching.chunkStopPhrases[id] = phrases;
+            else delete matching.chunkStopPhrases[id];
+        }
     });
 }
 

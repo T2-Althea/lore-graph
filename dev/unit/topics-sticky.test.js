@@ -96,3 +96,22 @@ test('trigger phrases send their section; "a + b" needs both words; Only when na
     const meaning = { chunks: [{ id: abyss, rank: 0, weak: false, alone: true }], entities: [] };
     assert.ok(!(await ids('Something dark lies below.', meaning)).includes(abyss), 'Only when named: never by meaning alone');
 });
+
+test('stop phrases hold back sections that came in indirectly, but not ones the chat names', async () => {
+    const { chunks, graph } = await setup();
+    const abyss = chunks.find(c => /Abyss/.test(c.id)).id;
+    const meaning = { chunks: [{ id: abyss, rank: 0, weak: false }], entities: [] };
+    const plain = buildRetrievalIndex(graph, chunks, { modes: {}, safeAliases: [], checkedNames: [] });
+    const stopping = buildRetrievalIndex(graph, chunks, { modes: {}, safeAliases: [], checkedNames: [], chunkStopPhrases: { [abyss]: ['wardens'] } });
+    const run = (index, text) => retrieve(index, [text], opts(), countTokens, meaning);
+
+    const scene = 'The Marsh Wardens rested by the fire.';
+    assert.ok(sent(await run(plain, scene)).some(c => c.id === abyss), 'sent by meaning without a stop phrase');
+    const held = await run(stopping, scene);
+    assert.ok(!sent(held).some(c => c.id === abyss), 'held back by the stop phrase');
+    assert.equal(held.chunks.find(c => c.id === abyss)?.status, 'stopped');
+    assert.equal(held.chunks.find(c => c.id === abyss)?.stopPhrase, 'wardens');
+
+    const named = await run(stopping, 'The Marsh Wardens rested while the Tide Temple priests spoke of the Abyss.');
+    assert.ok(sent(named).some(c => c.id === abyss), 'still sent when the chat names what the section is about');
+});

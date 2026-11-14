@@ -22,13 +22,14 @@ ENTITIES: the setting-specific things in this chunk that a roleplayer might need
 - Include named things and terms the lore gives a specific in-world meaning (e.g. "Warden's Seal", "the Hollow Court", "ironglass", "wraith", "Tide Rite").
 - Do NOT include everyday words or generic descriptive phrases (e.g. "route", "vacancy", "weight", "contract budget", "dead quiet", "careless extraction") unless the lore treats them as a defined term.
 - Prefer fewer, meaningful entities: usually 3 to 10 per chunk.
-- Always include the main subject named in the section or subsection title (e.g. "Wraiths" for "Wraiths In The Marsh", "Warden's Seal" for "The Warden's Seal"), with defined_here true.
+- When the section or subsection title names a thing, always include that thing (e.g. "Wraiths" for "Wraiths In The Marsh", "Warden's Seal" for "The Warden's Seal"), with defined_here true.
+- When the title only names a topic, sums up the section or asks a question (e.g. "Life Aboard", "Growth and Age", "Why They Left", "Trade and Wealth", "Telling a Seer from a Fraud"), do NOT make the title itself an entity. Extract the specific things the section is about instead.
 For each entity:
 - "name": the canonical name. If it is in the known entity list, use EXACTLY that name.
 - "type": one of ${ENTITY_TYPES.join(', ')}. Use Concept only if nothing else fits.
 - "aliases": other specific names this chunk uses for the same thing (e.g. "the Court" for "the Hollow Court"). Never use a general word as an alias (not "keeper" for "lighthouse keeper", not "glow" for "ironglass glow"): aliases are used to merge entities, so a vague alias merges unrelated things. Empty array if none.
 - "description": one sentence, in your own words, saying what it is. Empty string if this chunk only mentions it in passing.
-- "defined_here": true if this chunk explains what the thing is or is mainly about it (the section or subsection title usually names such a thing); false if it is only mentioned.
+- "defined_here": true if this chunk explains what the thing is or is mainly about it (a title that names a thing usually marks one); false if it is only mentioned.
 
 RELATIONS connect two entities (use the same names). Each relation must read as a TRUE sentence: "<source> <type> <target>".
 Types: part_of, located_in, requires, has_authority_over, limited_by, causes, produces, classified_as, reclassifies_to, contrasts_with, exception_to, related_to (only if nothing else fits).
