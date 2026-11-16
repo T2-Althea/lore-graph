@@ -410,3 +410,11 @@ Oct 2026). Paths are relative to the SillyTavern root.
   one of its entities (a name seed, not a meaning seed) or its own trigger fired; pinned ignores them.
   Section window has the box plus "Apply to all of <doc>". Tested: "elf, elven, enclave" on all
   VEN-01 sections drops them from the elf-in-Veridia scene, and a scene naming a Venari still gets them.
+- 0.9.2: aliases never join two names that are each defined somewhere (`buildGraph` merge guard).
+  One result listing "Profane Relic" as an alias of "Relic" had folded Relic and every kind of Relic
+  into one entity, and re-extraction kept it (the known-entity list told the model to reuse it). On
+  the user's lore 68 groups held 2+ defined names; most were wrong (Ghost/Ghost Ship, Garden/Noble
+  House, Organic/Manacite Core). Real synonyms split this way show up as duplicates for the
+  duplicate finder; approved merges always apply. Refused aliases are dropped from the entity.
+- 0.9.2: prompt says "What X Is" names X, a general term and its kinds are separate entities, and a
+  kind is never an alias. Map: section filter (appears once a document is picked).

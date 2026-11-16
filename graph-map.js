@@ -140,6 +140,7 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story
         steps: 1,
         type: '',
         doc: '',
+        section: '', // one chunk of the chosen document: what extraction got from it
         placeholders: 'hide', // hide | show | only
         hideHubs: true,
         group: true,
@@ -188,6 +189,7 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story
                 </select>
                 <select class="text_pole lore_graph_map_type"><option value="">All types</option>${ENTITY_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}</select>
                 <select class="text_pole lore_graph_map_doc"><option value="">All documents</option>${allDocs.map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('')}</select>
+                <select class="text_pole lore_graph_map_section" title="Only the things extraction found in one section of this document" style="display: none;"><option value="">All sections</option></select>
                 <select class="text_pole lore_graph_map_placeholders" title="Placeholders are things your lore mentions but never explains (dashed yellow dots)">
                     <option value="hide">Hide placeholders</option><option value="show">Show placeholders</option><option value="only">Only placeholders</option>
                 </select>
@@ -256,6 +258,7 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story
             if (view.placeholders === 'hide' && entity.placeholder && view.mode !== 'highlight' && id !== view.focus) return false;
             if (view.type && entity.type !== view.type) return false;
             if (view.doc && !docsOf(entity).has(view.doc)) return false;
+            if (view.section && !entity.sourceChunks.includes(view.section)) return false;
             return true;
         };
         ids = new Set([...ids].filter(keep));
@@ -529,7 +532,21 @@ export async function showGraphMap(graph, { onOpenChunk, focus, highlight, story
     root.on('change', '.lore_graph_map_mode', function () { view.mode = String($(this).val()); draw(); });
     root.on('change', '.lore_graph_map_steps', function () { view.steps = Number($(this).val()); draw(); });
     root.on('change', '.lore_graph_map_type', function () { view.type = String($(this).val()); draw(); });
-    root.on('change', '.lore_graph_map_doc', function () { view.doc = String($(this).val()); draw(); });
+    /** The section list for the chosen document, in document order ("§2" before "§10"). */
+    const fillSections = () => {
+        const box = root.find('.lore_graph_map_section');
+        view.section = '';
+        if (!view.doc) {
+            box.hide().html('<option value="">All sections</option>');
+            return;
+        }
+        const number = (id) => Number(/§(\d+)/.exec(id)?.[1] ?? 0);
+        const ids = [...new Set(graph.entities.flatMap(e => e.sourceChunks).filter(c => c.split(' ')[0] === view.doc))]
+            .sort((a, b) => number(a) - number(b) || a.localeCompare(b));
+        box.html(`<option value="">All sections</option>${ids.map(id => `<option value="${escapeHtml(id)}">${escapeHtml(id.slice(view.doc.length + 1))}</option>`).join('')}`).show();
+    };
+    root.on('change', '.lore_graph_map_doc', function () { view.doc = String($(this).val()); fillSections(); draw(); });
+    root.on('change', '.lore_graph_map_section', function () { view.section = String($(this).val()); draw(); });
     root.on('change', '.lore_graph_map_placeholders', function () { view.placeholders = String($(this).val()); draw(); });
     root.on('change', '.lore_graph_map_group', function () { view.group = $(this).prop('checked'); draw(); });
     root.on('change', '.lore_graph_map_hubs', function () { view.hideHubs = $(this).prop('checked'); draw(); });

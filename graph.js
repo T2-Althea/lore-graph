@@ -145,6 +145,30 @@ export function buildGraph(store, chunkIds) {
     /** @type {{ chunkId: string, relation: import('./schema.js').ExtractedRelation }[]} */
     const relations = [];
 
+    // Names some chunk defines under their own name. An alias never joins two of these: one result
+    // listing "Profane Relic" as another name for "Relic" would otherwise fold every kind of Relic
+    // (and the general term) into one entity. Real synonyms split this way come back as duplicates,
+    // which the duplicate finder can offer to merge; merges the user approved always apply.
+    const definedKeys = new Set();
+    for (const chunkId of chunkIds) {
+        const result = store.chunkResults[chunkId];
+        if (!result || result.status !== 'ok') continue;
+        for (const entity of result.entities) {
+            if (entity.defined_here) definedKeys.add(normalizeKey(entity.name));
+        }
+    }
+    /** @type {Map<string, string|null>} union-find root -> the defined name in its group */
+    const definedOfRoot = new Map();
+    const definedOf = (root) => (definedOfRoot.has(root) ? definedOfRoot.get(root) : (definedKeys.has(root) ? root : null));
+    const aliasUnion = (a, b) => {
+        const ra = uf.find(a), rb = uf.find(b);
+        if (ra === rb) return;
+        const da = definedOf(ra), db = definedOf(rb);
+        if (da && db && da !== db) return;
+        uf.union(ra, rb);
+        definedOfRoot.set(uf.find(ra), da ?? db);
+    };
+
     for (const chunkId of chunkIds) {
         const result = store.chunkResults[chunkId];
         if (!result || result.status !== 'ok') continue;
@@ -154,7 +178,7 @@ export function buildGraph(store, chunkIds) {
             uf.find(key);
             for (const alias of entity.aliases) {
                 const aliasKey = normalizeKey(alias);
-                if (aliasKey) uf.union(key, aliasKey);
+                if (aliasKey) aliasUnion(key, aliasKey);
             }
             mentions.push({ chunkId, entity, key });
         }
@@ -194,7 +218,10 @@ export function buildGraph(store, chunkIds) {
         const aliasMap = new Map();
         for (const m of group) {
             for (const candidate of [m.entity.name, ...m.entity.aliases]) {
-                if (normalizeKey(candidate) !== id && !aliasMap.has(candidate.toLowerCase())) {
+                const candidateKey = normalizeKey(candidate);
+                // An alias that names a different entity (a merge the guard refused) isn't this one's.
+                if (uf.parent.has(candidateKey) && uf.find(candidateKey) !== root) continue;
+                if (candidateKey !== id && !aliasMap.has(candidate.toLowerCase())) {
                     aliasMap.set(candidate.toLowerCase(), candidate);
                 }
             }
